@@ -1,0 +1,11 @@
+# arXiv TeX source of the paper (reference only; the compiled PDF is committed instead)
+arXiv-1312.6120v3/
+
+# macOS
+.DS_Store
+
+# Lake / Lean build artifacts
+/.lake/
+/lake-packages/
+*.olean
+*.olean.tmp
