@@ -12,16 +12,59 @@ network's empirical square loss `Lsq`. The remaining gap to a true
 "derivation from the deep linear network" is Layer 3 — the matrix dynamics and
 the SVD change of variables that decouples the modes.
 
-3. **Full matrix → SVD reduction (HARD, deferred).** Saxe §1.1: the matrix flow
-   `wb_avg` (`τ Ẇᵃ = Wᵇᵀ(Σ³¹ − WᵇWᵃ)`, `τ Ẇᵇ = (Σ³¹ − WᵇWᵃ)Wᵃᵀ` under `Σ¹¹=I`),
-   the SVD `Σ³¹ = U S Vᵀ`, the change of variables `Wᵃ = W̄ᵃ Vᵀ`, `Wᵇ = U W̄ᵇ`
-   (Eq. `wbo_dyn`), then the orthogonal/decoupled **invariant manifold**
-   (`aᵅ·bᵝ = 0` for `α≠β`) on which the cross-mode competition terms vanish and
-   each mode obeys the scalar pair `ab_dyn`. Blockers: Mathlib has **no SVD
-   factorization** (only `LinearMap.singularValues`); needs the symmetric spectral
-   theorem + the invariant-manifold argument. Budget for building SVD. Until then,
-   the honest claim is "gradient flow of the *per-mode* square loss ⇒ `ab_dyn`",
-   not the matrix→mode reduction.
+3. **Full matrix → SVD mode reduction (Layer 3, HARD).** Saxe §1.1. Reframed
+   so the SVD is *isolated into one hypothesis* (Phase B) and the hard SVD
+   *existence* (Phase E) can be built independently / deferred / upstreamed.
+
+   Convention: `Wᵃ = W₂₁ : N₂×N₁` (input→hidden), `Wᵇ = W₃₂ : N₃×N₂`
+   (hidden→output), map `y = Wᵇ Wᵃ x`, input correlation `Σ¹¹ = I` (whitening),
+   input–output correlation `Σ³¹ : N₃×N₁`. Loss `E = ½‖Σ³¹ − Wᵇ Wᵃ‖²_F`.
+
+   - **Phase A — matrix gradient flow → `wb_avg`** *(MEDIUM)*. Define `E` entrywise
+     (`½ ∑ᵢⱼ (Σ³¹ − Wᵇ Wᵃ)ᵢⱼ²`, mirroring Layer 2's finite-sum choice — avoids the
+     no-instance Frobenius inner-product-space diamond on `Matrix`). Per-entry
+     partials give `τ Ẇᵃ = Wᵇᵀ(Σ³¹ − Wᵇ Wᵃ)`, `τ Ẇᵇ = (Σ³¹ − Wᵇ Wᵃ)Wᵃᵀ`. Index
+     algebra over `∂(Wᵇ Wᵃ)/∂Wₖₗ`; elementary but heavy. Parallels Layers 1–2.
+   - **Phase B — orthogonal change of variables → `wbo_dyn`** *(LOW–MEDIUM,
+     conceptual heart)*. Take an SVD `Σ³¹ = U S Vᵀ` (U,V orthogonal) **as a
+     hypothesis**; substitute `Wᵃ = W̄ᵃ Vᵀ`, `Wᵇ = U W̄ᵇ`. Frobenius norm is
+     orthogonally invariant (`‖U M Vᵀ‖_F = ‖M‖_F`, via `trace(MᵀM)` + cyclicity
+     `trace_mul_cycle` + `UᵀU=I`, `VᵀV=I`), so `E = ½‖S − W̄ᵇ W̄ᵃ‖²` and the flow
+     becomes `τ Ẇ̄ᵃ = W̄ᵇᵀ(S − W̄ᵇ W̄ᵃ)`, `τ Ẇ̄ᵇ = (S − W̄ᵇ W̄ᵃ)W̄ᵃᵀ`.
+   - **Phase C — column/row extraction → `a_dyn`** *(MEDIUM)*. `S` diagonal; read
+     off the per-mode vector ODEs with the competition sums `∑_{γ≠α} bᵞ(aᵅ·bᵞ)`.
+     Index manipulation of `Matrix.mul` entries.
+   - **Phase D — decoupled invariant manifold → `ab_dyn` (scalar)** *(HIGH)*. On
+     init `aᵅ,bᵅ ∝ rᵅ` (orthonormal), cross dot-products stay 0, competition
+     vanishes ⇒ scalar `ab_dyn` (already linked to Layers 1–2). Needs a
+     forward-invariance argument for the manifold (ODE-flavored).
+   - **Phase E — SVD existence (the build, HIGH, independent).** Discharges
+     Phase B's hypothesis. Construct from the Hermitian spectral theorem on
+     `G := Mᵀ M`:
+       1. `G` Hermitian + PSD (`isHermitian_transpose_mul_self`,
+          `posSemidef_conjTranspose_mul_self`); eigenvalues `dᵢ ≥ 0`
+          (`eigenvalues_conjTranspose_mul_self_nonneg`).
+       2. Spectral theorem `G = V D Vᵀ`, `V = eigenvectorUnitary`, orthogonal
+          (`Matrix.IsHermitian.spectral_theorem`, `Analysis/Matrix/Spectrum.lean`).
+       3. Singular values `σᵢ = Real.sqrt dᵢ` (scalar sqrt — no matrix sqrt needed).
+       4. For `σᵢ>0`, `uᵢ := σᵢ⁻¹ • (M vᵢ)`; orthonormal since
+          `⟨Mvᵢ,Mvⱼ⟩ = vᵢᵀ G vⱼ = dⱼ δᵢⱼ` *(MEDIUM)*.
+       5. Extend `{uᵢ : σᵢ>0}` to an orthonormal basis of `ℝ^{N₃}`
+          (`Orthonormal.exists_orthonormalBasis_extension`); assemble `U`
+          *(MEDIUM–HIGH: the reindexing between `Fin m`, the support set, and
+          eigenvector indices is the main bookkeeping sink)*.
+       6. `M = U Σ Vᵀ` from `M vⱼ = σⱼ uⱼ` (σⱼ=0 ⇒ `Mvⱼ=0` since `‖Mvⱼ‖²=dⱼ=0`),
+          i.e. `M V = U Σ`, then right-multiply by `Vᵀ`.
+     Statement-design choice to settle skeleton-first: rectangular `Σ` (encode the
+     diagonal cleanly — `Real.sqrt`-of-eigenvalues placed on a rect-diagonal) vs.
+     the square `N₃=N₁` special case; orthogonality as `Uᵀ U = 1` vs.
+     `∈ orthogonalGroup`. Candidate to contribute upstream to Mathlib.
+
+   **Sequencing (chosen):** A → B with the SVD hypothesized. This gives an honest
+   "gradient flow on the network loss, rewritten in the SVD basis, decouples"
+   result fast; E is tackled independently later. Don't start with E (multi-session
+   sink) — it blocks nothing if B carries the SVD as a hypothesis. Until E lands,
+   the honest claim stays "given an SVD of Σ³¹, …".
 
 **Backburner — the time / asymptotic analysis** (transition/escape-time scaling,
 and the `t → ∞` limit `uf → s`). Explicitly deferred.
