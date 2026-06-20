@@ -74,6 +74,16 @@ After completing each proof, reflect on what worked and what didn't. If there's 
 
 **Grep the Mathlib source for exact signatures instead of recalling them** — `_root_.` prefixes, argument order, and the exact derivative form are not reliably memorable. `grep -rn "theorem HasDerivAt.div " .lake/packages/mathlib/Mathlib/` resolved three bugs at once this session.
 
+**Bridge a `def`'s `^2`/`Pi`-op to a `.mul` combinator with `simp only [theDef, pow_two]` then `exact`.** For `HasDerivAt (fun x => myDef …) v x` where `myDef` unfolds to `(…)^2/2`: build `h := (h1.mul h1).div_const 2` from the inner `h1`, then `simp only [myDef, pow_two]` (rewrites the goal's function *under the binder* into the `(…)*(…)/2` form the combinator produced), `rw` the derivative value into the combinator's exact shape (`(c'·d + d·c')/2`, including any un-simplified `1*b`/`a*1` from `mul_const`/`const_mul`), then `exact h`. `^2` is *not* defeq to `x*x` (`npow` vs `mul`), so the `pow_two` rewrite is mandatory; `id x` *is* defeq to `x`, so leftover `id` from `hasDerivAt_id` needs no cleanup.
+
+**Drop an additive constant from a partial derivative with `.add_const`.** To show two losses differing by a weight-independent constant have the same gradient: prove the function identity `(fun a => Lbig a) = (fun a => Lsmall a + c)` by `funext; exact <algebra lemma>`, `rw` it, then `exact (hasDerivAt_Lsmall …).add_const _`. Lets a network-loss partial reuse the abstract-loss partial verbatim.
+
+**Expand `∑ (f − c·g)²` into separate sums with `mul_sum` + `← sum_sub_distrib` + `← sum_add_distrib`, close with `sum_congr rfl (fun _ _ => by ring)`.** Pull every scalar inside its sum (`Finset.mul_sum`), then merge the sums back into one (`← Finset.sum_sub_distrib`, `← Finset.sum_add_distrib`) so a single per-term `ring` finishes. Keep an irreducible sum (e.g. `∑ yμ²`) as a `ring` atom by leaving it untouched on both sides.
+
+**Put a `deriv …` directly in a `structure` field, then collapse it with `.deriv`.** A gradient-flow predicate can read `HasDerivAt a (-(deriv (fun x => L s x (b t)) (a t)) / τ) t`; downstream, `rw [(hasDerivAt_L_fst …).deriv] at hflow` turns the `deriv` into the closed form and a `show … = … by ring` retargets the value. Reads like the math (`a' = −∂ₐL/τ`) and stays honest (references `L`).
+
+**LSP `lean_diagnostic_messages` returning `success:false, items:[]` means "not elaborated yet", not "clean".** Happens when a file imports a *new* sibling module not yet compiled to oleans. Don't read it as success — run `lake build` (which compiles the dependency) and trust that.
+
 ## Mathlib API Reference (build out as we go)
 
 Derivative combinators (`Mathlib/Analysis/Calculus/Deriv/*`). The *function* comes out as a `Pi`-op (see Proof tactics); these *derivative* forms are exact:
@@ -81,6 +91,8 @@ Derivative combinators (`Mathlib/Analysis/Calculus/Deriv/*`). The *function* com
 - `HasDerivAt.div (hc) (hd) (hx : d x ≠ 0) : HasDerivAt (c / d) ((c' * d x - c x * d') / d x ^ 2) x`
 - `HasDerivAt.sub (hf) (hg) : HasDerivAt (f - g) (f' - g') x`  — also `.add`, `.add_const`, `.sub_const`
 - `HasDerivAt.const_mul (c) (hf) : HasDerivAt (fun x => c * f x) (c * f') x`  — also `.div_const c`
+- `HasDerivAt.const_sub (c) (hf) : HasDerivAt (fun x => c − f x) (−f') x`  — used for `fun x => s − x*b₀`; note `mul_const`/`const_mul` leave a literal `1*b`/`a*1` in `f'`, absorb it with the value-`rw … by ring`
+- `HasDerivAt.add_const (hf) (c) : HasDerivAt (fun x => f x + c) f' x`  — drops a weight-independent loss constant
 - `HasDerivAt.exp (hf) : HasDerivAt (fun x => Real.exp (f x)) (Real.exp (f x) * f') x`
 - `HasDerivAt.pow n (hf) : HasDerivAt (fun x => f x ^ n) (↑n * f x ^ (n-1) * f') x`  (casts — see tactics)
 - `hasDerivAt_id (x) : HasDerivAt id 1 x`;  `HasDerivAt.deriv : … → deriv f x = f'`;  `.differentiableAt`
@@ -88,13 +100,18 @@ Derivative combinators (`Mathlib/Analysis/Calculus/Deriv/*`). The *function* com
 Constancy (`Mathlib/Analysis/Calculus/MeanValue.lean`):
 - `is_const_of_deriv_eq_zero (hf : Differentiable ℝ f) (hf' : ∀ x, deriv f x = 0) (x y) : f x = f y` (note the `_root_.` prefix; `is_const_of_fderiv_eq_zero` is the normed-space version)
 
+Finset sums (`Mathlib/Algebra/BigOperators/*`), for the network square loss:
+- `Finset.mul_sum : b * ∑ i, f i = ∑ i, b * f i`  (pulls a scalar into a sum)
+- `Finset.sum_sub_distrib : ∑ (f − g) = ∑ f − ∑ g`;  `Finset.sum_add_distrib : ∑ (f + g) = ∑ f + ∑ g`  (use `←` to merge sums)
+- `Finset.sum_congr rfl (fun i _ => by ring)`  (close `∑ f = ∑ g` term-by-term)
+
 Real / order lemmas used:
 - `Real.exp_pos`, `Real.exp_zero`
 - `one_lt_div (hb : 0 < b) : 1 < a / b ↔ b < a`
 - `div_eq_iff (hc : c ≠ 0) : a / c = b ↔ a = b * c`
 
 Forward pointers (not yet used):
-- Gradients (next session — deriving the ODE from the loss): `HasGradientAt` / `gradient` in `Mathlib/Analysis/Calculus/Gradient/Basic.lean`, bridged to `fderiv`/`HasDerivAt` via `hasGradientAt_iff_hasFDerivAt`.
+- Per-coordinate gradient flow chosen over abstract `gradient` (Layer 1, done): raw `ℝ×ℝ` carries the sup-norm, *not* an inner product, so `gradient`/`HasGradientAt` would need `EuclideanSpace ℝ (Fin 2)` or `WithLp 2 (ℝ×ℝ)`. If a true `∇` form is ever wanted: `Mathlib/Analysis/Calculus/Gradient/Basic.lean`, bridged via `hasGradientAt_iff_hasFDerivAt`.
 - ODE uniqueness (time analysis, later): `ODE_solution_unique_of_mem_Icc` in `Mathlib/Analysis/ODE/ExistUnique.lean` (set-local Lipschitz; the bare `ODE_solution_unique` needs GLOBAL Lipschitz — won't fit a quadratic RHS like `2u(s-u)`).
 - Limits (`t→∞`, later): `Real.tendsto_exp_atTop`, `tendsto_inv_atTop_zero`, `Filter.Tendsto.div`.
 - Mathlib has NO SVD *factorization* (only `LinearMap.singularValues`); the symmetric spectral theorem + PSD machinery exist if the full matrix→mode reduction is attempted.

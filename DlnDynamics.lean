@@ -5,3 +5,5 @@
 import DlnDynamics.Basic
 import DlnDynamics.Conservation
 import DlnDynamics.ClosedForm
+import DlnDynamics.GradientFlow
+import DlnDynamics.Network
