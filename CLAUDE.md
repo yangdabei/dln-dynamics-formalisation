@@ -58,7 +58,46 @@ Before attempting a `sorry`, estimate the probability of proving it directly (e.
 
 After completing each proof, reflect on what worked and what didn't. If there's a reusable lesson — a tactic pattern, a Mathlib gotcha, a refactoring that unlocked progress — add it here (not in auto memory). This file is the single source of truth for accumulated lessons, so they persist across machines.
 
+**Derivative combinators build the function at the `Pi` level, not as `fun r => …`.** `HasDerivAt.mul/.div/.sub/.add` produce `HasDerivAt (c * d) …`, `(c / d)`, `(f - g)` — pointwise `Pi` operations, *not* lambdas. So `convert <combinator> using 1` fails on the *function* argument (it compares `c / d` against your `fun r => …` or a `def` like `uf`), and the closing tactic then "made no progress" on the leftover goal. Don't fight `convert`: `rw` the derivative *value* into the exact combinator form, then discharge with `exact`, which checks full definitional equality and transparently unfolds your `def`, `Pi.div`, and `pow_two`. **Rule of thumb: prefer `exact`/defeq over `convert`/syntactic whenever the goal's function is a `def` or `fun` and the combinator's is a `Pi`-op.**
+
+**To retarget a `HasDerivAt`'s derivative to a nicer expression,** prove `<combinator-derivative> = <nice form>` (by `field_simp`/`ring`) and `rw [show … = … by …] at h; exact h` — or `rw` the goal's stated derivative into the combinator form and `exact <combinator>`. `convert … using 1/2` does **not** reliably expose the scalar derivative equation for `HasDerivAt` (it unfolds through `HasDerivAtFilter`/`HasFDerivAt`).
+
+**A bare `_` for the derivative in a term-mode `have h : HasDerivAt f _ x := term` can fail** with "don't know how to synthesize placeholder for argument `f'`" when `f` is a `def` that doesn't unify *syntactically* with `term`'s function. Give the explicit value, or use a tactic proof (`:= by unfold f; exact term`).
+
+**`field_simp` sometimes closes the goal by itself** (it runs a `ring`-normalizer), so a trailing `; ring` then errors `no goals`; other times it leaves a polynomial identity that needs `ring`. Don't reflexively chain `field_simp; ring` — check which case applies. `field_simp` also needs the relevant `_ ≠ 0` facts *in context*; stage them first (`have hDne := (denom_pos …).ne'`).
+
+**Keep an opaque subterm (e.g. `Real.exp (2*s*t/τ)`) as a single `ring` atom** by building it from ONE shared `HasDerivAt` for the inner function, so every occurrence is *syntactically identical*. `ring` treats it as one variable only if the terms match exactly — a differently-associated inner argument silently becomes a second atom and `ring` fails.
+
+**Prefer `pow_two` + `.mul` over `.pow 2`** when the result feeds `ring`/`rw`/`exact`: `.pow n` emits `↑n * f x ^ (n-1) * f'` with a `Nat.cast` and an unreduced `n-1` that trip term-matching. `(h.mul h)` is cast-free.
+
+**Confirm gap-freeness with `#print axioms <thm>`** (or `lean_verify`): expect `[propext, Classical.choice, Quot.sound]`. A `sorryAx` is a real hole that the text-based sorry-gate won't catch if it entered via a dependency.
+
+**Grep the Mathlib source for exact signatures instead of recalling them** — `_root_.` prefixes, argument order, and the exact derivative form are not reliably memorable. `grep -rn "theorem HasDerivAt.div " .lake/packages/mathlib/Mathlib/` resolved three bugs at once this session.
+
 ## Mathlib API Reference (build out as we go)
+
+Derivative combinators (`Mathlib/Analysis/Calculus/Deriv/*`). The *function* comes out as a `Pi`-op (see Proof tactics); these *derivative* forms are exact:
+- `HasDerivAt.mul (hc) (hd) : HasDerivAt (c * d) (c' * d x + c x * d') x`
+- `HasDerivAt.div (hc) (hd) (hx : d x ≠ 0) : HasDerivAt (c / d) ((c' * d x - c x * d') / d x ^ 2) x`
+- `HasDerivAt.sub (hf) (hg) : HasDerivAt (f - g) (f' - g') x`  — also `.add`, `.add_const`, `.sub_const`
+- `HasDerivAt.const_mul (c) (hf) : HasDerivAt (fun x => c * f x) (c * f') x`  — also `.div_const c`
+- `HasDerivAt.exp (hf) : HasDerivAt (fun x => Real.exp (f x)) (Real.exp (f x) * f') x`
+- `HasDerivAt.pow n (hf) : HasDerivAt (fun x => f x ^ n) (↑n * f x ^ (n-1) * f') x`  (casts — see tactics)
+- `hasDerivAt_id (x) : HasDerivAt id 1 x`;  `HasDerivAt.deriv : … → deriv f x = f'`;  `.differentiableAt`
+
+Constancy (`Mathlib/Analysis/Calculus/MeanValue.lean`):
+- `is_const_of_deriv_eq_zero (hf : Differentiable ℝ f) (hf' : ∀ x, deriv f x = 0) (x y) : f x = f y` (note the `_root_.` prefix; `is_const_of_fderiv_eq_zero` is the normed-space version)
+
+Real / order lemmas used:
+- `Real.exp_pos`, `Real.exp_zero`
+- `one_lt_div (hb : 0 < b) : 1 < a / b ↔ b < a`
+- `div_eq_iff (hc : c ≠ 0) : a / c = b ↔ a = b * c`
+
+Forward pointers (not yet used):
+- Gradients (next session — deriving the ODE from the loss): `HasGradientAt` / `gradient` in `Mathlib/Analysis/Calculus/Gradient/Basic.lean`, bridged to `fderiv`/`HasDerivAt` via `hasGradientAt_iff_hasFDerivAt`.
+- ODE uniqueness (time analysis, later): `ODE_solution_unique_of_mem_Icc` in `Mathlib/Analysis/ODE/ExistUnique.lean` (set-local Lipschitz; the bare `ODE_solution_unique` needs GLOBAL Lipschitz — won't fit a quadratic RHS like `2u(s-u)`).
+- Limits (`t→∞`, later): `Real.tendsto_exp_atTop`, `tendsto_inv_atTop_zero`, `Filter.Tendsto.div`.
+- Mathlib has NO SVD *factorization* (only `LinearMap.singularValues`); the symmetric spectral theorem + PSD machinery exist if the full matrix→mode reduction is attempted.
 
 ## House rules
 - No `sorry`, `admit`, `native_decide`, or new `axiom`s in committed code.
