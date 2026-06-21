@@ -11,8 +11,8 @@ The compiled paper is included as [`saxe-2014.pdf`](saxe-2014.pdf).
 
 ## What is formalized
 
-For a single decoupled input–output mode of strength `s`, learning timescale
-`τ`, and the scalar weight projections `a, b : ℝ → ℝ`:
+**Reduced single-mode dynamics.** For one decoupled input–output mode of strength
+`s`, learning timescale `τ`, and the scalar weight projections `a, b : ℝ → ℝ`:
 
 | Result | Statement | Saxe ref | Lean |
 | --- | --- | --- | --- |
@@ -21,10 +21,25 @@ For a single decoupled input–output mode of strength `s`, learning timescale
 | Closed form | `u_f(t) = s·e^{2st/τ} / (e^{2st/τ} − 1 + s/u₀)` | Eq. `u_soln` | `uf` |
 | Reduced ODE | `u_f` solves `τ u' = 2u(s − u)`, with `u_f(0) = u₀` | Eq. `sigmoidal_dyn` | `uf_hasDerivAt`, `uf_zero` |
 
-All results hold on the paper's regime `0 < u₀ < s`, `0 < τ`.
+(All on the paper's regime `0 < u₀ < s`, `0 < τ`.)
 
-**Deferred** (future work): the `t → ∞` limit `u_f → s`, ODE uniqueness, and the
-depth-`N` generalization `τ u' = (N−1) u^{2−2/(N−1)}(s − u)` (Eq. `deep_dyn`).
+**Derivation from gradient descent.** `IsABFlow` and the matrix dynamics are
+derived, not posited:
+
+| Result | Statement | Saxe ref | Lean |
+| --- | --- | --- | --- |
+| Per-mode loss → ODE | gradient flow of `L = ½(s − ab)²` is `IsABFlow` | Eq. `ab_2en` | `isABFlow_of_gradFlow` |
+| Network loss → loss | `½∑(yμ − ab·xμ)² = L + const` (whitening + correlation) | §1 | `Lsq_eq`, `isABFlow_of_networkGradFlow` |
+| Matrix flow | grad. descent on `½‖Σ³¹ − WᵇWᵃ‖²` gives `τ Ẇᵃ = Wᵇᵀ(Σ³¹−WᵇWᵃ)`, `τ Ẇᵇ = (Σ³¹−WᵇWᵃ)Wᵃᵀ` | Eq. `wb_avg` | `matrixFlow_of_gradFlow` |
+
+**Scope/honesty.** The matrix flow (`wb_avg`) is established; the SVD change of
+variables that decouples the modes (`wb_avg → wbo_dyn → a_dyn → ab_dyn`, Saxe
+§1.1) is **not yet formalized**. The scalar gradient-flow results above are for
+the already-decoupled one mode — a derived side result, *not* that reduction.
+
+**Deferred** (future work): the SVD reduction chain (Layer 3 Phases B–E; see
+`PROGRESS.md`), the `t → ∞` limit `u_f → s`, ODE uniqueness, and the depth-`N`
+generalization `τ u' = (N−1) u^{2−2/(N−1)}(s − u)` (Eq. `deep_dyn`).
 
 ## Build
 
@@ -37,16 +52,19 @@ Check there are no proof gaps:
 
 ```sh
 bash scripts/no_sorry.sh
-python scripts/check_closed_form.py   # numpy numerical cross-check
+python3 scripts/check_closed_form.py   # numerical cross-check (pure stdlib)
 ```
 
 ## Layout
 
 ```
-DlnDynamics.lean               root, imports the three modules
+DlnDynamics.lean               root, imports the modules below
 DlnDynamics/Basic.lean         IsABFlow, denom, uf, denom_pos
 DlnDynamics/Conservation.lean  ab_conserved, ab_conserved_eq
 DlnDynamics/ClosedForm.lean    uf_zero, uf_hasDerivAt
+DlnDynamics/GradientFlow.lean  L, IsABGradFlow, isABFlow_of_gradFlow      (Layer 1)
+DlnDynamics/Network.lean       Lsq, Lsq_eq, isABFlow_of_networkGradFlow   (Layer 2)
+DlnDynamics/MatrixFlow.lean    Ematrix, matrixFlow_of_gradFlow            (Layer 3, Phase A)
 scripts/no_sorry.sh            sorry / axiom gate (also run in CI)
 scripts/check_closed_form.py   numerical sanity check
 ```

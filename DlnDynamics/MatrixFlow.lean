@@ -16,14 +16,18 @@ Eq. `wb_avg` — the matrix gradient flow
 
 — from per-entry gradient descent on `E`. This is the matrix analog of
 `DlnDynamics.GradientFlow` (Layers 1–2): the entry partials are computed as
-directional derivatives along the standard basis matrices `stdBasisMatrix k l 1`
+directional derivatives along the single-entry matrices `Matrix.single k l 1`
 (avoiding single-entry-update bookkeeping), then bundled into a matrix-valued
 `HasDerivAt` via `hasDerivAt_pi`.
 
-Phase B (the SVD change of variables `Σ³¹ = U S Vᵀ` decoupling the modes) builds
-on this; see `PROGRESS.md`.
+This is Layer-3 **Phase A** and is complete and gap-free. Phase B (the SVD change
+of variables `Σ³¹ = U S Vᵀ` decoupling the modes, with the SVD hypothesized)
+builds on this; see `PROGRESS.md`. What is established here is the matrix flow
+`wb_avg` from the network loss — *not yet* the SVD reduction to the scalar
+`ab_dyn`; the scalar development in `GradientFlow`/`Network` is a derived
+side result for the already-decoupled one-mode loss, not that reduction.
 
-This module provides (skeleton — proofs in progress):
+This module provides:
 
 * `Ematrix` — the network square loss (Saxe Eq. `ab_en` with `Σ¹¹ = I`);
 * `hasDerivAt_Ematrix_fst/_snd` — the entry partials `∂E/∂Wᵃₖₗ = −(Wᵇᵀ(Σ³¹−WᵇWᵃ))ₖₗ`,
