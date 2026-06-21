@@ -44,6 +44,8 @@ Before attempting a `sorry`, estimate the probability of proving it directly (e.
 
 **Keep proofs small and factored.** If a proof has more than ~3 intermediate `have` steps, factor them into standalone lemmas. Each lemma should have a small, independently testable interface — this avoids churning where fixing one step breaks steps below it.
 
+**Make the Lean proof structure mirror the human/paper proof.** Each step of the paper's argument should be its own named lemma or labelled `have`, in the paper's order, so a human can read the formal proof against the source line-by-line (e.g. `competition_vanishes` ↔ "the modes don't compete", then "project onto rᵅ" ↔ `HasDerivAt.dotProduct_const`). Prefer this even when a single opaque `simp`/`nlinarith` would close the goal faster — auditability against the source is the priority. A proof that only a machine can follow is a liability for a formalization whose point is to certify the paper.
+
 **When a user suggests an approach or lesson, rephrase it for CLAUDE.md** rather than copying verbatim. Lessons should be concise, actionable, and fit the existing style.
 
 **Work autonomously on low-risk tasks once the path is clear.** When reduced to well-understood engineering (Mathlib interfacing, type bridging, assembling existing components), continue autonomously. Check in when hitting unexpected obstacles, discovering the approach won't work, or completing major milestones. Progress over permission when risk is low.
