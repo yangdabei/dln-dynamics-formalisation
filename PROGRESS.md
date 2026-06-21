@@ -4,13 +4,16 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
-## Next session — full matrix → SVD mode reduction (Layer 3), or asymptotics
+## Next session — Phase B (SVD change of variables), then C/D/E
 
-Layers 1–2 below are **done**: `IsABFlow` is now a *derived* consequence of
-gradient flow, both on the abstract per-mode loss `L` and on the one-mode
-network's empirical square loss `Lsq`. The remaining gap to a true
-"derivation from the deep linear network" is Layer 3 — the matrix dynamics and
-the SVD change of variables that decouples the modes.
+Layers 1–2 and **Layer-3 Phase A are done**: `IsABFlow` is a derived consequence
+of gradient flow (scalar `L` and one-mode `Lsq`), and the full three-layer matrix
+flow `wb_avg` is derived from gradient descent on `Ematrix` (`MatrixFlow.lean`).
+Next is **Phase B** — the orthogonal change of variables `Σ³¹ = U S Vᵀ` (SVD
+hypothesized) reducing `Ematrix` to `½‖S − W̄ᵇW̄ᵃ‖²` and `wb_avg` to `wbo_dyn`,
+via Frobenius orthogonal invariance. Then C (column extraction → `a_dyn`), D
+(invariant manifold → scalar `ab_dyn`), E (SVD existence). See the phased plan
+below.
 
 3. **Full matrix → SVD mode reduction (Layer 3, HARD).** Saxe §1.1. Reframed
    so the SVD is *isolated into one hypothesis* (Phase B) and the hard SVD
@@ -20,11 +23,12 @@ the SVD change of variables that decouples the modes.
    (hidden→output), map `y = Wᵇ Wᵃ x`, input correlation `Σ¹¹ = I` (whitening),
    input–output correlation `Σ³¹ : N₃×N₁`. Loss `E = ½‖Σ³¹ − Wᵇ Wᵃ‖²_F`.
 
-   - **Phase A — matrix gradient flow → `wb_avg`** *(MEDIUM)*. Define `E` entrywise
-     (`½ ∑ᵢⱼ (Σ³¹ − Wᵇ Wᵃ)ᵢⱼ²`, mirroring Layer 2's finite-sum choice — avoids the
-     no-instance Frobenius inner-product-space diamond on `Matrix`). Per-entry
-     partials give `τ Ẇᵃ = Wᵇᵀ(Σ³¹ − Wᵇ Wᵃ)`, `τ Ẇᵇ = (Σ³¹ − Wᵇ Wᵃ)Wᵃᵀ`. Index
-     algebra over `∂(Wᵇ Wᵃ)/∂Wₖₗ`; elementary but heavy. Parallels Layers 1–2.
+   - **Phase A — matrix gradient flow → `wb_avg`** *(DONE)*. `MatrixFlow.lean`:
+     `Ematrix` (entrywise `½ ∑ᵢⱼ (Σ³¹ − Wᵇ Wᵃ)ᵢⱼ²`), entry partials
+     `hasDerivAt_Ematrix_fst/_snd`, `IsMatrixGradFlow`, and `matrixFlow_of_gradFlow`
+     (`τ Ẇᵃ = Wᵇᵀ(Σ³¹ − Wᵇ Wᵃ)`, `τ Ẇᵇ = (Σ³¹ − Wᵇ Wᵃ)Wᵃᵀ`). Entry partials taken
+     as directional derivatives along `Matrix.single k l 1`; bundled to the matrix
+     ODE via `hasDerivAt_pi` (defeq, not `rw`).
    - **Phase B — orthogonal change of variables → `wbo_dyn`** *(LOW–MEDIUM,
      conceptual heart)*. Take an SVD `Σ³¹ = U S Vᵀ` (U,V orthogonal) **as a
      hypothesis**; substitute `Wᵃ = W̄ᵃ Vᵀ`, `Wᵇ = U W̄ᵇ`. Frobenius norm is
@@ -72,6 +76,33 @@ and the `t → ∞` limit `uf → s`). Explicitly deferred.
 **Tooling note.** Start the session with `lean-lsp-mcp` loaded and run `lake build`
 once up front to warm imports, so the sub-second `lean_goal` /
 `lean_diagnostic_messages` loop is live.
+
+## Session 2026-06-21 — Layer-3 plan + Phase A (matrix flow `wb_avg`)
+
+**Done.**
+- Planned Layer 3 in full (phased A–E, SVD isolated into a Phase-B hypothesis;
+  detailed SVD-existence build for Phase E). Recorded above; committed `c4dd0a6`.
+- **Phase A complete** (`DlnDynamics/MatrixFlow.lean`): derived the three-layer
+  matrix flow `wb_avg` from gradient descent on the network square loss `Ematrix`.
+  `hasDerivAt_Ematrix_fst/_snd` (entry partials `∂E/∂Wᵃₖₗ = −(Wᵇᵀ(Σ³¹−WᵇWᵃ))ₖₗ`,
+  `∂E/∂Wᵇₖₗ = −((Σ³¹−WᵇWᵃ)Wᵃᵀ)ₖₗ`) and the capstone `matrixFlow_of_gradFlow`.
+- Verified: clean `lake build` (8565 jobs); sorry-gate green; capstone
+  `#print axioms = [propext, Classical.choice, Quot.sound]`.
+
+**Method that worked (matrix calculus without matrix `fderiv`).** Entry partial =
+directional derivative of the loss along `Matrix.single k l 1` at `0`, which makes
+the loss a sum of squares *affine in `x`* → the Layer-1/2 squared-affine technique
+lifts directly (no `Function.update`). Bundle the entrywise time-derivatives into
+the matrix ODE via `hasDerivAt_pi` applied in *term mode* (`Matrix`'s normed
+instance is `fast_instance% Pi.normedAddCommGroup`, defeq to `Pi` but not
+syntactically — so `exact`/`apply` work, `rw` does not). Distilled into CLAUDE.md
+(Proof tactics + Matrix API).
+
+**Pitfalls (in CLAUDE.md).** `hasDerivAt_pi` won't `rw` on `Matrix` (instance
+mismatch) — apply via defeq; `HasDerivAt.sum` gives sum-of-functions, bridge the
+final `exact` with `simpa only [Finset.sum_apply]`; unannotated `x • realMatrix`
+defaults the scalar to `ℕ` (`NontriviallyNormedField ℕ`) — write `fun (x : ℝ) =>`
+and `single k l (1 : ℝ)`.
 
 ## Session 2026-06-20 (cont.) — `IsABFlow` derived from gradient flow + network loss
 

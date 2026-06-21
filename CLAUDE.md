@@ -84,6 +84,14 @@ After completing each proof, reflect on what worked and what didn't. If there's 
 
 **LSP `lean_diagnostic_messages` returning `success:false, items:[]` means "not elaborated yet", not "clean".** Happens when a file imports a *new* sibling module not yet compiled to oleans. Don't read it as success — run `lake build` (which compiles the dependency) and trust that.
 
+**`Matrix`'s normed/topology instances are non-instances activated by `open Matrix`** (`Matrix.normedAddCommGroup := fast_instance% Pi.normedAddCommGroup`, scoped). Consequence for matrix-valued `HasDerivAt`: `Pi` lemmas like `hasDerivAt_pi` will NOT `rw` (the goal carries `instTopologicalSpaceMatrix`, the lemma `Pi.topologicalSpace` — syntactically distinct) but DO apply through `exact`/`apply`, which unify up to defeq (`fast_instance%` is defeq to the `Pi` instance). **Bundle entrywise derivatives in term mode:** `hasDerivAt_pi.2 fun k => hasDerivAt_pi.2 fun l => <entry proof>`, never `rw [hasDerivAt_pi]`. (Needs `open Matrix` in scope for the instances at all — without it, `HasDerivAt` on a `Matrix` won't even typecheck.)
+
+**`HasDerivAt.sum` yields a sum-*of-functions*-applied, not a function-of-sum.** Nesting it for `fun x => ∑ i, ∑ j, body` gives a goal whose function is `(∑ i, ∑ j, fun x => body) x` — defeq-blocked from `∑ i, ∑ j, body[x]` by `Finset.sum_apply` (a lemma, NOT beta). Close the final `exact` with `simpa only [Finset.sum_apply] using <built deriv>`.
+
+**Take an entry partial derivative as a directional derivative along `Matrix.single k l 1` at `0`** (`Matrix.single` = the single-entry matrix, formerly `stdBasisMatrix`). `fun x => loss (A + x • single k l 1)` is then a sum of squares of functions *affine in `x`*, so the Layer-1/2 squared-affine technique applies directly — no `Function.update` gymnautics, and `single`'s selector lemmas collapse the sum (see API).
+
+**Annotate `fun (x : ℝ) =>` and `single k l (1 : ℝ)` when the body smuls a real matrix.** An unannotated scalar `x • M` / literal `1` in a `Matrix _ _ ℝ` context defaults to `ℕ`, surfacing as `failed to synthesize NontriviallyNormedField ℕ` / `HSMul ℕ …` — a misleading error whose real cause is the missing `: ℝ`.
+
 ## Mathlib API Reference (build out as we go)
 
 Derivative combinators (`Mathlib/Analysis/Calculus/Deriv/*`). The *function* comes out as a `Pi`-op (see Proof tactics); these *derivative* forms are exact:
@@ -104,6 +112,14 @@ Finset sums (`Mathlib/Algebra/BigOperators/*`), for the network square loss:
 - `Finset.mul_sum : b * ∑ i, f i = ∑ i, b * f i`  (pulls a scalar into a sum)
 - `Finset.sum_sub_distrib : ∑ (f − g) = ∑ f − ∑ g`;  `Finset.sum_add_distrib : ∑ (f + g) = ∑ f + ∑ g`  (use `←` to merge sums)
 - `Finset.sum_congr rfl (fun i _ => by ring)`  (close `∑ f = ∑ g` term-by-term)
+- `Finset.sum_eq_single a (h_ne : ∀ b ∈ s, b ≠ a → f b = 0) (h_mem : a ∉ s → f a = 0) : ∑ x ∈ s, f x = f a`  (collapse a sum to one surviving term — picks out the `single`-selected index)
+- `Finset.sum_apply : (∑ k ∈ s, g k) i = ∑ k ∈ s, g k i`  (sum-of-functions ↦ function-of-sum; the bridge after `HasDerivAt.sum`)
+
+Matrix (`Mathlib/Data/Matrix/*`, `Mathlib/Analysis/Matrix/*`), for the three-layer flow (`open Matrix` for the scoped normed instances + `ᵀ` notation):
+- `Matrix.single i j a` — single-entry matrix (formerly `stdBasisMatrix`); `Matrix.single_apply : single i j a i' j' = if i = i' ∧ j = j' then a else 0`
+- selectors (proved locally in `MatrixFlow.lean`): `(B * single k l 1) i j = if j = l then B i k else 0` (column pick); `(single k l 1 * A) i j = if i = k then A l j else 0` (row pick) — both by `mul_apply` + `single_apply` + `Finset.sum_eq_single`
+- `Matrix.mul_add`, `Matrix.add_mul`, `Matrix.mul_smul : M * (a • N) = a • (M * N)`, `Matrix.smul_mul : (a • M) * N = a • (M * N)`
+- entry lemmas: `Matrix.add_apply`, `Matrix.sub_apply`, `Matrix.smul_apply` (`(a • M) i j = a • M i j`), `Matrix.transpose_apply : Mᵀ i j = M j i`, `Matrix.mul_apply : (M * N) i j = ∑ k, M i k * N k j`
 
 Real / order lemmas used:
 - `Real.exp_pos`, `Real.exp_zero`
@@ -114,7 +130,7 @@ Forward pointers (not yet used):
 - Per-coordinate gradient flow chosen over abstract `gradient` (Layer 1, done): raw `ℝ×ℝ` carries the sup-norm, *not* an inner product, so `gradient`/`HasGradientAt` would need `EuclideanSpace ℝ (Fin 2)` or `WithLp 2 (ℝ×ℝ)`. If a true `∇` form is ever wanted: `Mathlib/Analysis/Calculus/Gradient/Basic.lean`, bridged via `hasGradientAt_iff_hasFDerivAt`.
 - ODE uniqueness (time analysis, later): `ODE_solution_unique_of_mem_Icc` in `Mathlib/Analysis/ODE/ExistUnique.lean` (set-local Lipschitz; the bare `ODE_solution_unique` needs GLOBAL Lipschitz — won't fit a quadratic RHS like `2u(s-u)`).
 - Limits (`t→∞`, later): `Real.tendsto_exp_atTop`, `tendsto_inv_atTop_zero`, `Filter.Tendsto.div`.
-- Mathlib has NO SVD *factorization* (only `LinearMap.singularValues`); the symmetric spectral theorem + PSD machinery exist if the full matrix→mode reduction is attempted.
+- Mathlib has NO SVD *factorization* (only `LinearMap.singularValues`, values-only). To build it (Phase E) from the spectral theorem on `MᵀM`: `Matrix.IsHermitian.spectral_theorem` + `eigenvectorUnitary` (`Analysis/Matrix/Spectrum.lean`), `isHermitian_transpose_mul_self`, `posSemidef_conjTranspose_mul_self` / `eigenvalues_conjTranspose_mul_self_nonneg` (`Analysis/Matrix/PosDef.lean`), `Orthonormal.exists_orthonormalBasis_extension` (`Analysis/InnerProductSpace/PiL2.lean`), scalar `Real.sqrt` of eigenvalues (no matrix sqrt needed). The hard part is index bookkeeping (rectangular Σ; `Fin m` ↔ σ-support ↔ eigenvector indices), not the math. See `PROGRESS.md` Layer-3 plan.
 
 ## House rules
 - No `sorry`, `admit`, `native_decide`, or new `axiom`s in committed code.
