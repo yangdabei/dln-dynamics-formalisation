@@ -108,6 +108,10 @@ After completing each proof, reflect on what worked and what didn't. If there's 
 
 **`simp only [theDef]` may close a per-term goal by rfl when both sides line up after unfolding** — add a trailing `; ring` ONLY when commutativity is genuinely needed, else it errors "no goals". (Same proof skeleton: the a-side `flow_a_entry` needed `ring` (scalar on the opposite factor); the symmetric b-side did not.)
 
+**Reduce a vector ODE to a scalar one along a fixed direction by dotting the `HasDerivAt` with that direction.** For a flow `HasDerivAt (fun s => v s) D t` on `Fin n → ℝ`, `HasDerivAt.dotProduct_const h r : HasDerivAt (fun s => v s ⬝ᵥ r) (D ⬝ᵥ r) t` (build it like `HasDerivAt.matrix_mul_const`: `hasDerivAt_pi.1 h i |>.mul_const (r i)`, `HasDerivAt.sum`, `funext` bridge with `simp only [dotProduct, Finset.sum_apply]`). Then `rw` the function to the scalar projection (`fun s => v s ⬝ᵥ rᵅ = ca` via the manifold hypothesis) and the value to its closed form. This is the "project onto rᵅ" step that turns the paper's vector mode dynamics into scalar `ab_dyn` (`InvariantManifold.lean`).
+
+**Collapse an orthonormal-frame dot product with `smul_dotProduct` + `dotProduct_smul` + the orthonormality hypothesis.** `(c • r α) ⬝ᵥ (d • r β) = c • (d • (r α ⬝ᵥ r β))`; rewrite `r α ⬝ᵥ r β` by `horth α β : … = if α = β then 1 else 0`, then `if_pos rfl`/`if_neg h` and `smul_eq_mul`/`smul_zero`. Distinct modes give `0` (competition vanishes); the diagonal gives `c * d` (after `mul_one`). `ring` mops up the leftover `c • (d • 1)` ordering.
+
 ## Mathlib API Reference (build out as we go)
 
 Derivative combinators (`Mathlib/Analysis/Calculus/Deriv/*`). The *function* comes out as a `Pi`-op (see Proof tactics); these *derivative* forms are exact:

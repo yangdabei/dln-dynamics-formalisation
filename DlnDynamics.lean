@@ -10,3 +10,4 @@ import DlnDynamics.Network
 import DlnDynamics.MatrixFlow
 import DlnDynamics.SVDReduction
 import DlnDynamics.ModeDynamics
+import DlnDynamics.InvariantManifold

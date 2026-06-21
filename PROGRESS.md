@@ -4,24 +4,29 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
-## Next session — Phase D (invariant manifold), then E (SVD existence)
+## Next session — Phase D option 3 (forward-invariance, parallel), then E (SVD existence)
 
-Layers 1–2 and **Layer-3 Phases A, B, and the start of C are done.** Phase A: the
+Layers 1–2 and **Layer-3 Phases A, B, C, and D-option-1 are done.** Phase A: the
 matrix flow `wb_avg` from gradient descent (`MatrixFlow.lean`). **Phase B**
 (`SVDReduction.lean`): the orthogonal change of variables `Σ³¹ = U S Vᵀ` (SVD
 hypothesized via `IsSVD`) reducing `wb_avg` to the decoupled `wbo_dyn`
 (`wbo_dyn_of_gradFlow`), with reusable Frobenius/trace orthogonal-invariance API
 (`sum_sq_mul_orthogonal`) and loss invariance (`Ematrix_orthogonal_invariant`).
-**Phase C start** (`ModeDynamics.lean`): the per-mode vector ODEs `a_dyn`/`b_dyn`
-(column/row extraction with explicit `∑_{γ≠α}` competition sums), in the square
-diagonal case `N₃=N₁=N`, `S = diagonal σ`.
+**Phase C** (`ModeDynamics.lean`): the per-mode vector ODEs `a_dyn`/`b_dyn` (column/row
+extraction with explicit `∑_{γ≠α}` competition sums) in the square diagonal case
+`N₃=N₁=N`, `S = diagonal σ`, plus end-to-end `a_dyn_of_gradFlow`/`b_dyn_of_gradFlow`.
+**Phase D option 1** (`InvariantManifold.lean`): on the orthogonal-mode manifold the
+competition vanishes and the modes reduce to the scalar `ab_dyn` (`IsABFlow`) —
+`competition_vanishes`, `isABFlow_of_modeFlow`, and the full chain
+`isABFlow_of_gradFlow_on_manifold` (network gradient descent ⇒ `IsABFlow`, hence
+`Conservation`/`ClosedForm`), taking manifold-membership-for-all-t as a hypothesis.
 
-Next is **Phase D** — the decoupled invariant manifold: on orthogonal-mode init the
-competition sums vanish and `a_dyn` collapses to the scalar `ab_dyn` (already linked
-to Layers 1–2). A forward-invariance argument for an ODE-defined flow (HIGH risk).
-Then **Phase E** — SVD existence, discharging the `IsSVD` hypothesis. Remaining
-Phase-C cleanup: rectangular-diagonal `S` and threading `a_dyn` into the scalar
-reduction. See the phased plan below.
+Next is **Phase D option 3** — forward-invariance *in time* of the manifold (Saxe's
+"straightforward to verify ... remain parallel to rᵅ for all future time"), via ODE
+uniqueness, discharging option 1's manifold hypothesis. Handed to a **parallel session**
+(`PHASE_D_OPTION3.md`, new file `ManifoldInvariance.lean`); HIGH risk. Then **Phase E** —
+SVD existence, discharging the `IsSVD` hypothesis. Remaining Phase-C cleanup:
+rectangular-diagonal `S`. See the phased plan below.
 
 3. **Full matrix → SVD mode reduction (Layer 3, HARD).** Saxe §1.1. Reframed
    so the SVD is *isolated into one hypothesis* (Phase B) and the hard SVD
@@ -56,10 +61,17 @@ reduction. See the phased plan below.
      `b_dyn_of_gradFlow` composing `wbo_dyn_of_gradFlow` (network gradient flow + SVD +
      diagonal `S` ⇒ the mode ODEs for `Wᵃ V`, `Uᵀ Wᵇ`). Remaining (optional):
      rectangular `S`. The link to scalar `ab_dyn` is Phase D.
-   - **Phase D — decoupled invariant manifold → `ab_dyn` (scalar)** *(HIGH)*. On
-     init `aᵅ,bᵅ ∝ rᵅ` (orthonormal), cross dot-products stay 0, competition
-     vanishes ⇒ scalar `ab_dyn` (already linked to Layers 1–2). Needs a
-     forward-invariance argument for the manifold (ODE-flavored).
+   - **Phase D — decoupled invariant manifold → `ab_dyn` (scalar)** *(option 1 DONE,
+     `InvariantManifold.lean`; option 3 in a parallel session)*. On init `aᵅ,bᵅ ∝ rᵅ`
+     (orthonormal), cross dot-products are 0, competition vanishes ⇒ scalar `ab_dyn`.
+     **Option 1 (done):** `competition_vanishes`, `isABFlow_of_modeFlow` (reduction,
+     taking manifold-membership-for-all-t as a hypothesis), and the end-to-end
+     `isABFlow_of_gradFlow_on_manifold` (network gradient descent + SVD + diagonal `S`
+     + manifold ⇒ `IsABFlow`, hence `Conservation`/`ClosedForm`). **Option 3 (the hard
+     part, deferred to a parallel session, `PHASE_D_OPTION3.md`):** forward-invariance
+     *in time* of the manifold (the paper's "straightforward to verify ... remain
+     parallel to rᵅ for all future time") via ODE uniqueness — discharges option 1's
+     manifold hypothesis. New file `ManifoldInvariance.lean`.
    - **Phase E — SVD existence (the build, HIGH, independent).** Discharges
      Phase B's hypothesis. Construct from the Hermitian spectral theorem on
      `G := Mᵀ M`:
@@ -94,6 +106,28 @@ and the `t → ∞` limit `uf → s`). Explicitly deferred.
 **Tooling note.** Start the session with `lean-lsp-mcp` loaded and run `lake build`
 once up front to warm imports, so the sub-second `lean_goal` /
 `lean_diagnostic_messages` loop is live.
+
+## Session 2026-06-21 (cont.) — Phase D option 1 (invariant-manifold reduction to `ab_dyn`)
+
+**Done.**
+- **Phase D option 1 complete** (`DlnDynamics/InvariantManifold.lean`), formalizing Saxe
+  §"The time course of learning" (arXiv lines 162–189), the reduction of the vector mode
+  dynamics to the scalar `ab_dyn` on the orthogonal-mode manifold:
+  `HasDerivAt.dotProduct_const` (project a vector derivative onto a constant vector);
+  `competition_vanishes` (orthogonal modes don't compete — line 181); `isABFlow_of_modeFlow`
+  (on the manifold, `wbo_dyn` reduces to `IsABFlow` for the scalar projections `aᵅ·rᵅ`,
+  `bᵅ·rᵅ`); and the end-to-end `isABFlow_of_gradFlow_on_manifold` (network gradient
+  descent + SVD + diagonal `S` + manifold ⇒ `IsABFlow`, hence `Conservation`/`ClosedForm`).
+- The proof mirrors the paper: competition drops (orthonormality), the cooperative term
+  `(σα − aᵅ·bᵅ)bᵅ` projects onto `rᵅ` to give `τ ȧ = b(σα − ab)`.
+- Verified: clean `lake build` (8568 jobs); sorry-gate green; `#print axioms` =
+  `[propext, Classical.choice, Quot.sound]` for `isABFlow_of_modeFlow` and
+  `isABFlow_of_gradFlow_on_manifold`.
+
+**Scope honesty.** Option 1 takes manifold-membership-for-all-t (`hmemA`/`hmemB`) as an
+explicit hypothesis. The forward-invariance *in time* (the paper's "straightforward to
+verify ... remain parallel for all future time") is **option 3** — a separate ODE-uniqueness
+argument, handed to a parallel session (`PHASE_D_OPTION3.md`), not yet formalized.
 
 ## Session 2026-06-21 (cont.) — Phase B (`wbo_dyn`) + Phase C start (`a_dyn`/`b_dyn`)
 
