@@ -31,15 +31,23 @@ derived, not posited:
 | Per-mode loss → ODE | gradient flow of `L = ½(s − ab)²` is `IsABFlow` | Eq. `ab_2en` | `isABFlow_of_gradFlow` |
 | Network loss → loss | `½∑(yμ − ab·xμ)² = L + const` (whitening + correlation) | §1 | `Lsq_eq`, `isABFlow_of_networkGradFlow` |
 | Matrix flow | grad. descent on `½‖Σ³¹ − WᵇWᵃ‖²` gives `τ Ẇᵃ = Wᵇᵀ(Σ³¹−WᵇWᵃ)`, `τ Ẇᵇ = (Σ³¹−WᵇWᵃ)Wᵃᵀ` | Eq. `wb_avg` | `matrixFlow_of_gradFlow` |
+| SVD change of vars | given SVD `Σ³¹ = U S Vᵀ`, the flow decouples: `τ Ẇ̄ᵃ = W̄ᵇᵀ(S−W̄ᵇW̄ᵃ)`, `τ Ẇ̄ᵇ = (S−W̄ᵇW̄ᵃ)W̄ᵃᵀ` | Eq. `wbo_dyn` | `wbo_dyn_of_gradFlow` |
+| Mode extraction | `S` diagonal ⇒ per-mode `τ ȧᵅ = (sᵅ−bᵅ·aᵅ)bᵅ − ∑_{γ≠α}(bᵞ·aᵅ)bᵞ` (and `b_dyn`) | Eqs. `a_dyn`, `b_dyn` | `a_dyn`, `b_dyn` |
 
-**Scope/honesty.** The matrix flow (`wb_avg`) is established; the SVD change of
-variables that decouples the modes (`wb_avg → wbo_dyn → a_dyn → ab_dyn`, Saxe
-§1.1) is **not yet formalized**. The scalar gradient-flow results above are for
-the already-decoupled one mode — a derived side result, *not* that reduction.
+**Scope/honesty.** The matrix flow `wb_avg`, the SVD change of variables `wbo_dyn`
+(given an SVD of `Σ³¹` *as a hypothesis*, `IsSVD`), and the per-mode `a_dyn`/`b_dyn`
+(diagonal `S`, square case) are established — and composed end-to-end as
+`a_dyn_of_gradFlow`/`b_dyn_of_gradFlow`, the chain
+`network loss → wb_avg → wbo_dyn → a_dyn/b_dyn` in one theorem. Still open before the scalar
+`ab_dyn`: the decoupled **invariant manifold** (Phase D) that collapses `a_dyn` to
+`ab_dyn` on orthogonal-mode init, and **SVD existence** (Phase E) discharging the
+hypothesis. The scalar gradient-flow results above are the already-decoupled one mode;
+they connect to `ab_dyn` directly, pending Phase D.
 
-**Deferred** (future work): the SVD reduction chain (Layer 3 Phases B–E; see
-`PROGRESS.md`), the `t → ∞` limit `u_f → s`, ODE uniqueness, and the depth-`N`
-generalization `τ u' = (N−1) u^{2−2/(N−1)}(s − u)` (Eq. `deep_dyn`).
+**Deferred** (future work): Layer-3 Phases D (invariant manifold) and E (SVD
+existence), plus the rectangular-diagonal `S` generalization (see `PROGRESS.md`); the
+`t → ∞` limit `u_f → s`, ODE uniqueness, and the depth-`N` generalization
+`τ u' = (N−1) u^{2−2/(N−1)}(s − u)` (Eq. `deep_dyn`).
 
 ## Build
 
@@ -65,6 +73,9 @@ DlnDynamics/ClosedForm.lean    uf_zero, uf_hasDerivAt
 DlnDynamics/GradientFlow.lean  L, IsABGradFlow, isABFlow_of_gradFlow      (Layer 1)
 DlnDynamics/Network.lean       Lsq, Lsq_eq, isABFlow_of_networkGradFlow   (Layer 2)
 DlnDynamics/MatrixFlow.lean    Ematrix, matrixFlow_of_gradFlow            (Layer 3, Phase A)
+DlnDynamics/SVDReduction.lean  IsSVD, sum_sq_mul_orthogonal, wbo_dyn_of_gradFlow  (Layer 3, Phase B)
+DlnDynamics/ModeDynamics.lean  aMode/bMode, a_dyn/b_dyn, a_dyn_of_gradFlow (Layer 3, Phase C)
 scripts/no_sorry.sh            sorry / axiom gate (also run in CI)
-scripts/check_closed_form.py   numerical sanity check
+scripts/check_closed_form.py   numerical sanity check (ODE closed form)
+scripts/check_svd_reduction.py numerical sanity check (change of vars + a_dyn)
 ```

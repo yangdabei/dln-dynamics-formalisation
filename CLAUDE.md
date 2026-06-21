@@ -92,6 +92,22 @@ After completing each proof, reflect on what worked and what didn't. If there's 
 
 **Annotate `fun (x : ℝ) =>` and `single k l (1 : ℝ)` when the body smuls a real matrix.** An unannotated scalar `x • M` / literal `1` in a `Matrix _ _ ℝ` context defaults to `ℕ`, surfacing as `failed to synthesize NontriviallyNormedField ℕ` / `HSMul ℕ …` — a misleading error whose real cause is the missing `: ℝ`.
 
+**Rectangular matrix `*` is heterogeneous `HMul`, so the homogeneous smul-mul lemmas don't fire.** `smul_mul_assoc`/`mul_smul_comm` are stated for `Mul` (one type); a rectangular product `(a•M)*N` (different shapes) is `HMul`, so `rw` reports "did not find pattern `?r • ?x * ?y`". Use the `Matrix`-specific `Matrix.smul_mul : (a•M)*N = a•(M*N)` and `Matrix.mul_smul : M*(a•N) = a•(M*N)`.
+
+**To expose a *mid-product* pair like `Vᵀ*V` or `U*Uᵀ` for `rw [hV]`, target the exact grouping with `rw [show <flat> = <regrouped> from by simp only [Matrix.mul_assoc]]`.** Neither full left- nor right-assoc normal form puts an interior pair adjacent, so `simp only [Matrix.mul_assoc]` alone never lets the cancellation `rw` fire. Instead state the regrouped form (pair parenthesized) in a `show` and prove that step by `simp only [Matrix.mul_assoc]` (both sides flatten to the same normal form); then `rw [hV, Matrix.mul_one]` cancels. This is the workhorse for orthogonal-invariance / change-of-variables algebra (`SVDReduction.lean`).
+
+**Frobenius orthogonal invariance via trace.** To prove `∑∑ (U M Vᵀ)ᵢⱼ² = ∑∑ Mᵢⱼ²`: bridge `∑∑ Nᵢⱼ² = (Nᵀ*N).trace` (prove once: `simp only [Matrix.trace, Matrix.diag_apply, Matrix.mul_apply, Matrix.transpose_apply]; rw [Finset.sum_comm]; …pow_two`), then `rw [← bridge, ← bridge, Matrix.trace_mul_comm, <NNᵀ identity>, Matrix.trace_mul_cycle, hU, Matrix.one_mul, Matrix.trace_mul_comm]`. `trace_mul_comm` flips `NᵀN`↦`NNᵀ`; prove `(UMVᵀ)(UMVᵀ)ᵀ = U(MMᵀ)Uᵀ` (cancels `Vᵀ*V`), then `trace_mul_cycle` (`A*B*C↦C*A*B`) brings `Uᵀ*U` adjacent for `hU`.
+
+**Derivative through a CONSTANT matrix factor — go entrywise, bridge with `funext`.** For `HasDerivAt (fun s => f s * C) (f' * C) t` (C constant): `refine hasDerivAt_pi.2 (fun k => hasDerivAt_pi.2 (fun l => ?_))`, project the matrix hyp with `hasDerivAt_pi.1 (hasDerivAt_pi.1 hf k) m`, sum `HasDerivAt.sum (fun m _ => (proj m).mul_const (C m l))`. The sum-of-functions ↔ function-of-sum bridge via `simpa only [Finset.sum_apply, Matrix.mul_apply] using` can FAIL the defeq close for `Finset.sum` over `Fin`; instead prove the function identity explicitly: `have hfun : (fun s => (f s*C) k l) = ∑ m, (fun s => f s k m * C m l) := by funext s; simp only [Matrix.mul_apply, Finset.sum_apply]`, then `rw [hfun, hval]; exact hsum`.
+
+**Dot notation `h.myLemma` fails for a *self-defined* `HasDerivAt.myLemma`** — Lean unfolds `HasDerivAt` to `HasFDerivAtFilter` for the projection lookup and reports `HasFDerivAtFilter.myLemma` missing. Call it qualified: `HasDerivAt.myLemma h args`. (Mathlib's own `HasDerivAt.mul_const` etc. dot-resolve fine; only your new ones in a non-root namespace need qualification.)
+
+**Read a column/row derivative off a matrix `HasDerivAt` with nested `hasDerivAt_pi`.** `hasDerivAt_pi.2 (fun i => hasDerivAt_pi.1 (hasDerivAt_pi.1 h k) i)` gives `HasDerivAt (fun s => <row/col k of M s>) (<row/col k of M'>) t` — the result is a genuine `Pi` vector (no `Matrix`-instance friction). Then retarget the value vector by `funext i` + `Matrix.smul_apply`/`Pi.smul_apply`/`Pi.sub_apply`/`Finset.sum_apply`/`smul_eq_mul` and a per-entry identity.
+
+**Split a full sum into a distinguished term + the rest with `← Finset.add_sum_erase _ _ (Finset.mem_univ α)`, then `ring`.** Turns `∑ γ, f γ` into `f α + ∑ γ ∈ univ.erase α, f γ`; combined with the surrounding algebra (`ring`, treating the erase-sum and dot products as atoms) it produces the paper's `(… ) − ∑_{γ≠α} …` competition form (`ModeDynamics.lean`).
+
+**`simp only [theDef]` may close a per-term goal by rfl when both sides line up after unfolding** — add a trailing `; ring` ONLY when commutativity is genuinely needed, else it errors "no goals". (Same proof skeleton: the a-side `flow_a_entry` needed `ring` (scalar on the opposite factor); the symmetric b-side did not.)
+
 ## Mathlib API Reference (build out as we go)
 
 Derivative combinators (`Mathlib/Analysis/Calculus/Deriv/*`). The *function* comes out as a `Pi`-op (see Proof tactics); these *derivative* forms are exact:
@@ -119,7 +135,12 @@ Matrix (`Mathlib/Data/Matrix/*`, `Mathlib/Analysis/Matrix/*`), for the three-lay
 - `Matrix.single i j a` — single-entry matrix (formerly `stdBasisMatrix`); `Matrix.single_apply : single i j a i' j' = if i = i' ∧ j = j' then a else 0`
 - selectors (proved locally in `MatrixFlow.lean`): `(B * single k l 1) i j = if j = l then B i k else 0` (column pick); `(single k l 1 * A) i j = if i = k then A l j else 0` (row pick) — both by `mul_apply` + `single_apply` + `Finset.sum_eq_single`
 - `Matrix.mul_add`, `Matrix.add_mul`, `Matrix.mul_smul : M * (a • N) = a • (M * N)`, `Matrix.smul_mul : (a • M) * N = a • (M * N)`
-- entry lemmas: `Matrix.add_apply`, `Matrix.sub_apply`, `Matrix.smul_apply` (`(a • M) i j = a • M i j`), `Matrix.transpose_apply : Mᵀ i j = M j i`, `Matrix.mul_apply : (M * N) i j = ∑ k, M i k * N k j`
+- entry lemmas: `Matrix.add_apply`, `Matrix.sub_apply`, `Matrix.smul_apply` (`(a • M) i j = a • M i j`), `Matrix.transpose_apply : Mᵀ i j = M j i`, `Matrix.mul_apply : (M * N) i j = ∑ k, M i k * N k j`, `Matrix.diagonal_apply : diagonal d i j = if i = j then d i else 0`
+- `Matrix.transpose_mul : (M*N)ᵀ = Nᵀ*Mᵀ`, `Matrix.transpose_transpose : Mᵀᵀ = M`, `Matrix.transpose_one`, `Matrix.mul_assoc`, `Matrix.one_mul`, `Matrix.mul_one`, `Matrix.mul_sub`/`Matrix.sub_mul`
+- `Matrix.smul_mul : (a•M)*N = a•(M*N)`, `Matrix.mul_smul : M*(a•N) = a•(M*N)` (NOT `smul_mul_assoc`/`mul_smul_comm` for rectangular `*`)
+- `Matrix.mul_eq_one_comm_of_equiv (e : m ≃ n) : A*B = 1 ↔ B*A = 1` — square orthogonal reverse `U*Uᵀ=1` from `Uᵀ*U=1` via `(… (Equiv.refl _)).mp`
+- trace (`Mathlib/LinearAlgebra/Matrix/Trace.lean`): `Matrix.trace`, `Matrix.diag_apply : diag A i = A i i`, `Matrix.trace_mul_comm : trace (A*B) = trace (B*A)`, `Matrix.trace_mul_cycle : trace (A*B*C) = trace (C*A*B)`
+- `Matrix.dotProduct` (`⬝ᵥ`, needs `open Matrix`) `= ∑ i, u i * v i`; unfold with `simp only [dotProduct]`
 
 Real / order lemmas used:
 - `Real.exp_pos`, `Real.exp_zero`

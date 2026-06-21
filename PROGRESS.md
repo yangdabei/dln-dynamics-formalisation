@@ -4,16 +4,24 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
-## Next session — Phase B (SVD change of variables), then C/D/E
+## Next session — Phase D (invariant manifold), then E (SVD existence)
 
-Layers 1–2 and **Layer-3 Phase A are done**: `IsABFlow` is a derived consequence
-of gradient flow (scalar `L` and one-mode `Lsq`), and the full three-layer matrix
-flow `wb_avg` is derived from gradient descent on `Ematrix` (`MatrixFlow.lean`).
-Next is **Phase B** — the orthogonal change of variables `Σ³¹ = U S Vᵀ` (SVD
-hypothesized) reducing `Ematrix` to `½‖S − W̄ᵇW̄ᵃ‖²` and `wb_avg` to `wbo_dyn`,
-via Frobenius orthogonal invariance. Then C (column extraction → `a_dyn`), D
-(invariant manifold → scalar `ab_dyn`), E (SVD existence). See the phased plan
-below.
+Layers 1–2 and **Layer-3 Phases A, B, and the start of C are done.** Phase A: the
+matrix flow `wb_avg` from gradient descent (`MatrixFlow.lean`). **Phase B**
+(`SVDReduction.lean`): the orthogonal change of variables `Σ³¹ = U S Vᵀ` (SVD
+hypothesized via `IsSVD`) reducing `wb_avg` to the decoupled `wbo_dyn`
+(`wbo_dyn_of_gradFlow`), with reusable Frobenius/trace orthogonal-invariance API
+(`sum_sq_mul_orthogonal`) and loss invariance (`Ematrix_orthogonal_invariant`).
+**Phase C start** (`ModeDynamics.lean`): the per-mode vector ODEs `a_dyn`/`b_dyn`
+(column/row extraction with explicit `∑_{γ≠α}` competition sums), in the square
+diagonal case `N₃=N₁=N`, `S = diagonal σ`.
+
+Next is **Phase D** — the decoupled invariant manifold: on orthogonal-mode init the
+competition sums vanish and `a_dyn` collapses to the scalar `ab_dyn` (already linked
+to Layers 1–2). A forward-invariance argument for an ODE-defined flow (HIGH risk).
+Then **Phase E** — SVD existence, discharging the `IsSVD` hypothesis. Remaining
+Phase-C cleanup: rectangular-diagonal `S` and threading `a_dyn` into the scalar
+reduction. See the phased plan below.
 
 3. **Full matrix → SVD mode reduction (Layer 3, HARD).** Saxe §1.1. Reframed
    so the SVD is *isolated into one hypothesis* (Phase B) and the hard SVD
@@ -29,15 +37,25 @@ below.
      (`τ Ẇᵃ = Wᵇᵀ(Σ³¹ − Wᵇ Wᵃ)`, `τ Ẇᵇ = (Σ³¹ − Wᵇ Wᵃ)Wᵃᵀ`). Entry partials taken
      as directional derivatives along `Matrix.single k l 1`; bundled to the matrix
      ODE via `hasDerivAt_pi` (defeq, not `rw`).
-   - **Phase B — orthogonal change of variables → `wbo_dyn`** *(LOW–MEDIUM,
-     conceptual heart)*. Take an SVD `Σ³¹ = U S Vᵀ` (U,V orthogonal) **as a
-     hypothesis**; substitute `Wᵃ = W̄ᵃ Vᵀ`, `Wᵇ = U W̄ᵇ`. Frobenius norm is
-     orthogonally invariant (`‖U M Vᵀ‖_F = ‖M‖_F`, via `trace(MᵀM)` + cyclicity
-     `trace_mul_cycle` + `UᵀU=I`, `VᵀV=I`), so `E = ½‖S − W̄ᵇ W̄ᵃ‖²` and the flow
-     becomes `τ Ẇ̄ᵃ = W̄ᵇᵀ(S − W̄ᵇ W̄ᵃ)`, `τ Ẇ̄ᵇ = (S − W̄ᵇ W̄ᵃ)W̄ᵃᵀ`.
-   - **Phase C — column/row extraction → `a_dyn`** *(MEDIUM)*. `S` diagonal; read
-     off the per-mode vector ODEs with the competition sums `∑_{γ≠α} bᵞ(aᵅ·bᵞ)`.
-     Index manipulation of `Matrix.mul` entries.
+   - **Phase B — orthogonal change of variables → `wbo_dyn`** *(DONE,
+     `SVDReduction.lean`)*. SVD `Σ³¹ = U S Vᵀ` taken as the hypothesis `IsSVD`
+     (orthogonality `UᵀU=1`, `VᵀV=1`; reverse `UUᵀ=1`, `VVᵀ=1` derived via
+     `mul_eq_one_comm_of_equiv`). Frobenius invariance `∑(UMVᵀ)²=∑M²`
+     (`sum_sq_mul_orthogonal`) via the trace bridge `trace(MᵀM)=∑Mᵢⱼ²`
+     (`trace_transpose_mul_self`) + `trace_mul_comm`/`trace_mul_cycle`; loss
+     invariance `Ematrix_orthogonal_invariant`. Flow change of variables
+     `change_of_vars_a`/`_b` → `wbo_dyn`/`wbo_dyn_of_gradFlow`
+     (`τ Ẇ̄ᵃ = W̄ᵇᵀ(S − W̄ᵇ W̄ᵃ)`, `τ Ẇ̄ᵇ = (S − W̄ᵇ W̄ᵃ)W̄ᵃᵀ`). Derivative through a
+     constant matrix factor: `HasDerivAt.matrix_mul_const`/`const_matrix_mul`.
+   - **Phase C — column/row extraction → `a_dyn`/`b_dyn`** *(STARTED,
+     `ModeDynamics.lean`)*. Square diagonal case `N₃=N₁=N`, `S=diagonal σ`: per-mode
+     vectors `aMode` (column α), `bMode` (row α); entry competition identities
+     `flow_a_entry`/`flow_b_entry` (full Gram sum split off the α term via
+     `Finset.add_sum_erase`); the vector ODEs `a_dyn`/`b_dyn` with explicit
+     `∑_{γ≠α}` competition; and the **end-to-end** `a_dyn_of_gradFlow`/
+     `b_dyn_of_gradFlow` composing `wbo_dyn_of_gradFlow` (network gradient flow + SVD +
+     diagonal `S` ⇒ the mode ODEs for `Wᵃ V`, `Uᵀ Wᵇ`). Remaining (optional):
+     rectangular `S`. The link to scalar `ab_dyn` is Phase D.
    - **Phase D — decoupled invariant manifold → `ab_dyn` (scalar)** *(HIGH)*. On
      init `aᵅ,bᵅ ∝ rᵅ` (orthonormal), cross dot-products stay 0, competition
      vanishes ⇒ scalar `ab_dyn` (already linked to Layers 1–2). Needs a
@@ -76,6 +94,43 @@ and the `t → ∞` limit `uf → s`). Explicitly deferred.
 **Tooling note.** Start the session with `lean-lsp-mcp` loaded and run `lake build`
 once up front to warm imports, so the sub-second `lean_goal` /
 `lean_diagnostic_messages` loop is live.
+
+## Session 2026-06-21 (cont.) — Phase B (`wbo_dyn`) + Phase C start (`a_dyn`/`b_dyn`)
+
+**Done.**
+- **Phase B complete** (`DlnDynamics/SVDReduction.lean`): the SVD change of variables.
+  `IsSVD` interface (orthogonality + factorization, with derived `hUU`/`hVV`);
+  `trace_transpose_mul_self` (Frobenius² as a trace); `sum_sq_mul_orthogonal`
+  (orthogonal invariance via `trace_mul_comm`/`trace_mul_cycle`);
+  `Ematrix_orthogonal_invariant` (loss preserved); `HasDerivAt.matrix_mul_const`/
+  `const_matrix_mul`; `change_of_vars_a`/`_b`; capstones `wbo_dyn` and
+  `wbo_dyn_of_gradFlow` (compose with Phase A).
+- **Phase C started** (`DlnDynamics/ModeDynamics.lean`): square diagonal case.
+  `aMode`/`bMode` (column/row mode vectors); `mul_apply_eq_dot`/`_dot'`;
+  `flow_a_entry`/`flow_b_entry` (per-entry competition identities); the per-mode
+  vector ODEs `a_dyn`/`b_dyn` with explicit `∑_{γ≠α}` competition sums; and the
+  end-to-end `a_dyn_of_gradFlow`/`b_dyn_of_gradFlow` (network gradient descent + SVD +
+  diagonal `S` ⇒ the mode ODEs), completing the chain
+  `network loss → wb_avg → wbo_dyn → a_dyn/b_dyn`.
+- Verified: clean `lake build`; sorry-gate green; numerical pre-check
+  (`scripts/check_svd_reduction.py`, pure stdlib: change-of-variables residual
+  ~4e-12, `a_dyn` competition residual ~7e-15); `#print axioms` =
+  `[propext, Classical.choice, Quot.sound]` for `wbo_dyn_of_gradFlow`, `a_dyn`, `b_dyn`,
+  `a_dyn_of_gradFlow`, `b_dyn_of_gradFlow`.
+
+**Method.** The change of variables is at the *flow* level (only `UᵀU=1`/`VᵀV=1`
+plus their square-matrix reverses); `wbo_dyn` is then `matrixFlow_of_gradFlow` with the
+diagonal target, so the loss-invariance API (`sum_sq_mul_orthogonal`,
+`Ematrix_orthogonal_invariant`) is the *honest "loss is preserved"* statement rather
+than strictly on the critical path. Phase C reads off column/row α, splitting the full
+Gram sum `∑_γ` into the `γ=α` self term and the `∑_{γ≠α}` competition with
+`Finset.add_sum_erase`.
+
+**Pitfalls (distilled into CLAUDE.md).** Rectangular `*` is heterogeneous `HMul`, so
+`smul_mul_assoc`/`mul_smul_comm` don't fire — use `Matrix.smul_mul`/`Matrix.mul_smul`;
+dot notation `h.myLemma` fails for a locally-defined `HasDerivAt.myLemma` (the type
+unfolds to `HasFDerivAtFilter`) — call it qualified; `Σ` is a reserved token (can't name
+a variable `Σ31`); orthogonality reverse via `Matrix.mul_eq_one_comm_of_equiv`.
 
 ## Session 2026-06-21 — Layer-3 plan + Phase A (matrix flow `wb_avg`)
 
