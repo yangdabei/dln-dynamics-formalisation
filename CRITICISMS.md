@@ -5,6 +5,35 @@ Lean formalization. These are not style nits; they are the issues most likely to
 affect whether the project remains mathematically honest, readable, and able to
 reach the full matrix-to-mode reduction.
 
+## Resolution status (updated 2026-06-21)
+
+Most of the original criticisms have been addressed across the Phase B/C/D work; the
+items below are kept verbatim as the review, with status noted here.
+
+- **Critical 1 (keep the reduction distinct from the per-mode side result)** — the full
+  chain `network loss → wb_avg → wbo_dyn → a_dyn/b_dyn → ab_dyn` is now formalized as
+  composable theorems (`wbo_dyn_of_gradFlow`, `a_dyn_of_gradFlow`,
+  `isABFlow_of_gradFlow_on_manifold`); docs state explicitly which links are established
+  and that the one remaining gap is forward-invariance in time.
+- **Critical 2 (Phase B before SVD existence)** — done: `SVDReduction.lean`, SVD carried
+  as the `IsSVD` hypothesis; SVD existence (Phase E) deferred.
+- **Critical 3 / Recommended 6 (invariant manifold as a real theorem)** — option 1 done
+  (`isABFlow_of_modeFlow`, with explicit manifold hypotheses, not hidden in the
+  extraction); forward-invariance in time (option 3) is scoped as its own theorem in
+  `PHASE_D_OPTION3.md` and is in progress in a parallel session.
+- **High 1 (stale docs)** — done. **High 3 (Frobenius API)** — done
+  (`trace_transpose_mul_self`, `sum_sq_mul_orthogonal`, named trace steps).
+  **High 4 (mode indexing)** — done (`aMode`/`bMode`, explicit `∑_{γ≠α}` competition).
+- **High 2 (SVD interface) / Recommended 7** — the `IsSVD` interface is designed and used;
+  the SVD *existence* build (Phase E) is the main remaining deferred item.
+- **Medium 2 (lemma structure over comments)** — addressed; large rewrites factored into
+  named lemmas mirroring the paper, now a standing rule in `CLAUDE.md`.
+  **Medium 3 (conceptual chain over endpoint equations)** — addressed (composable chain).
+  **Medium 1 (integration argument in `ClosedForm`)** — unchanged, an honest accepted gap.
+
+Remaining: Phase D option 3 (forward-invariance, in a parallel session), Phase E (SVD
+existence), and the optional rectangular-diagonal `S` generalization.
+
 ## Critical
 
 1. The scalar `ab_dyn` development is not yet the paper's full derivation.
@@ -98,11 +127,13 @@ reach the full matrix-to-mode reduction.
 
 ## Recommended Next Steps
 
-1. Update stale docs in `README.md` and the header of `MatrixFlow.lean`.
-2. Define the Phase B SVD-hypothesis interface without proving SVD existence.
-3. Prove reusable Frobenius/trace orthogonal-invariance lemmas.
-4. Prove the change of variables from `wb_avg` to `wbo_dyn`.
-5. Extract column/row mode equations as `a_dyn` and `b_dyn`.
-6. Treat the invariant manifold proof as its own milestone.
-7. Only then return to full SVD existence, using the interface that Phase B/C
-   actually require.
+1. ✅ Update stale docs in `README.md` and the header of `MatrixFlow.lean`.
+2. ✅ Define the Phase B SVD-hypothesis interface without proving SVD existence (`IsSVD`).
+3. ✅ Prove reusable Frobenius/trace orthogonal-invariance lemmas
+   (`trace_transpose_mul_self`, `sum_sq_mul_orthogonal`).
+4. ✅ Prove the change of variables from `wb_avg` to `wbo_dyn` (`wbo_dyn_of_gradFlow`).
+5. ✅ Extract column/row mode equations as `a_dyn` and `b_dyn`.
+6. ✅ Treat the invariant manifold proof as its own milestone (option 1 done,
+   `isABFlow_of_modeFlow`; ⟳ option 3 forward-invariance in a parallel session).
+7. ⬜ Only then return to full SVD existence (Phase E), using the `IsSVD` interface that
+   Phase B/C/D actually require — still deferred.
