@@ -45,8 +45,11 @@ Numerics: `scripts/check_svd_existence.py` (stdlib + Jacobi): full-rank `U diag(
 5e-15; general/rank-deficient (U via Gram-Schmidt completion) `UᵀU=1` to 4e-12 and reconstruction
 to 2e-8, rank deficiency up to 4.
 
-**Deferred / next.** Still open: general *unbalanced* manifold init (Picard–Lindelöf), the
-`t→∞` limit `uf→s`, and the optional rectangular-diagonal `S` (non-square `Σ³¹`).
+**Next steps (agreed).** (1) **Depth-`N` law** (Eq. `deep_dyn`) — generalize the 3-layer result
+to `N` layers (a new theorem, the larger piece). (2) **Time equation** — the `t→∞` limit `uf→s`
+and the learning-time integral `t(u)`/`u_int` (`ClosedForm` verifies the solution, not the
+integration/asymptotics). Also still open (lower priority): unbalanced/hyperbolic dynamics
+(Appendix A, `a≠b`) and rectangular `Σ³¹`.
 
 ## Session 2026-06-22 — Phase D option 3 DONE (forward-invariance via ODE uniqueness)
 

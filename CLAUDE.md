@@ -6,16 +6,37 @@ learning in deep linear neural networks* (arXiv:1312.6120). The compiled paper
 is `saxe-2014.pdf` at the repo root. The TeX source files are in @arXiv-1312.6120v3. 
 
 ## Scope (what is formalized)
-- `DlnDynamics/Basic.lean` — the two-mode gradient flow `IsABFlow` (Saxe Eq.
-  `ab_dyn`), the closed-form solution `uf` (Eq. `u_soln`), and `denom_pos`.
-- `DlnDynamics/Conservation.lean` — `a² − b²` is a constant of motion
-  (`ab_conserved`, Saxe §1.3).
-- `DlnDynamics/ClosedForm.lean` — `uf` solves the reduced logistic ODE
-  `τ u' = 2 u (s − u)` (`uf_hasDerivAt`, Eq. `sigmoidal_dyn`) with `uf 0 = u₀`.
 
-Deferred, not yet formalized: the `t → ∞` limit `uf → s`, ODE uniqueness, and the
-depth-`N` law (Eq. `deep_dyn`). Do not stub these; add them as real theorems when
-the time comes.
+The full **3-layer** chain `network gradient descent → matrix flow → SVD basis →
+decoupled modes → scalar ab_dyn → conserved quantity + closed-form sigmoidal solution`
+is formalized end-to-end and gap-free (balanced / orthogonal-mode regime, square
+correlation matrix). Modules:
+- `Basic.lean` — two-mode gradient flow `IsABFlow` (Eq. `ab_dyn`), closed form `uf`
+  (Eq. `u_soln`), `denom_pos`.
+- `Conservation.lean` — `a² − b²` constant of motion (`ab_conserved`, §1.3).
+- `ClosedForm.lean` — `uf` solves the logistic `τ u' = 2 u (s − u)` (`uf_hasDerivAt`,
+  Eq. `sigmoidal_dyn`) with `uf 0 = u₀`.
+- `GradientFlow.lean` / `Network.lean` — per-mode loss gradient flow ⇒ `IsABFlow`.
+- `MatrixFlow.lean` (Phase A) — matrix flow `wb_avg` from gradient descent.
+- `SVDReduction.lean` (Phase B) — SVD change of variables ⇒ decoupled `wbo_dyn`
+  (`IsSVD` hypothesis).
+- `ModeDynamics.lean` (Phase C) — mode extraction `a_dyn`/`b_dyn` (competition sums).
+- `InvariantManifold.lean` (Phase D-1) — reduction on the manifold `isABFlow_of_modeFlow`.
+- `ManifoldInvariance.lean` (Phase D-3) — forward-invariance *in time* via ODE uniqueness;
+  hypothesis-free balanced headline.
+- `SVDExistence.lean` (Phase E) — SVD *existence* for any square `Sg` (`exists_isSVD`),
+  discharging `IsSVD`; end-to-end `exists_mode_dynamics_of_gradFlow`.
+
+**Next steps (agreed direction):**
+1. **Depth-`N` law (Eq. `deep_dyn`)** — generalize the 3-layer result to `N` layers
+   (a genuinely new theorem, the larger undertaking).
+2. **Time equation** — the `t → ∞` limit `uf → s` and the learning-time integral
+   `t(u)`/`u_int` (`ClosedForm` currently verifies the *solution*, not the integration
+   or the asymptotics).
+
+Also deferred: unbalanced / hyperbolic dynamics (Appendix A, `a ≠ b`; the manifold theorem
+already takes scalar solutions as a hypothesis) and rectangular `Σ³¹`. Do not stub any of
+these; add them as real theorems when the time comes.
 
 ## Conventions
 - Paper regime `0 < u₀ < s`, `0 < τ` carried explicitly as hypotheses.
