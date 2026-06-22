@@ -4,6 +4,30 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
+## Session 2026-06-22 — Analytical core complete: infinite-depth, unbalanced, depth-`N` forward-invariance
+
+**Done.** Three more modules, closing out the analytical core of Saxe (2014). All gap-free
+(`#print axioms` = `[propext, Classical.choice, Quot.sound]`), `lake build` clean, no `sorry`,
+each formula numerically pre-checked.
+
+- **`InfiniteDepth.lean`** (Eqs. `inf_dyn`, `inf_tc`). `deepNonlinearity_tendsto`: `deep_dyn`'s
+  nonlinearity `u^{2−2/(N_l−1)} → u²` as `N_l → ∞` (rpow continuity in the exponent), i.e. the
+  `inf_dyn` form emerges from `deep_dyn`. `infLearningTime_integral`: `∫ du/(u²(s−u)) =
+  (1/s²)ln(u_f(s−u₀)/(u₀(s−u_f))) + 1/(su₀) − 1/(su_f)` (Eq. `inf_tc`, second FTC).
+- **`UnbalancedDynamics.lean`** (Appendix A, `a ≠ b`). `hyperbolic_dyn`/`hyperbolic_dyn_sqrt`:
+  `u = ab` obeys `τ u' = (a²+b²)(s−u) = √(c₀²+4u²)(s−u)` with conserved `c₀ = a²−b²` — the
+  product-rule generalization of `sigmoidal_dyn`. Tracks `u` directly, avoiding the paper's
+  θ-parametrization (whose stated relations carry factor-of-2 typos); `c₀=0` recovers `2u(s−u)`.
+- **`DeepManifoldInvariance.lean`** (depth-`N` forward-invariance). `deep_manifold_invariant`:
+  equal layer scalars at `t=0` stay equal for all `t` — ODE uniqueness on the `IsDeepFlow` field
+  `deepField` (a `C^∞` polynomial via `contDiff_prod`), reusing `eq_of_autonomous_ode` from
+  `ManifoldInvariance`. Gives the initial-condition-only `deep_dyn_of_deepFlow_init`.
+
+**Analytical core now complete**: 3-layer chain, depth-`N` law + full matrix reduction +
+forward-invariance, time equation, infinite-depth limit, unbalanced dynamics. Remaining genuine
+generalizations: rectangular `Σ³¹` (non-square SVD reduction) and the unbalanced learning-*time*
+integral (messy hyperbolic `∫`; the dynamics is done).
+
 ## Session 2026-06-22 — Milestone 2: the learning timescale (Saxe Eq. `u_int` + asymptotics)
 
 **Done.** `DlnDynamics/TimeEquation.lean` — the two time-equation facts of Saxe §"time course".

@@ -17,3 +17,6 @@ import DlnDynamics.DeepDynamics
 import DlnDynamics.DeepMatrixFlow
 import DlnDynamics.DeepReduction
 import DlnDynamics.TimeEquation
+import DlnDynamics.InfiniteDepth
+import DlnDynamics.UnbalancedDynamics
+import DlnDynamics.DeepManifoldInvariance

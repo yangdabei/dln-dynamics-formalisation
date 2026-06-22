@@ -37,14 +37,15 @@ items below are kept verbatim as the review, with status noted here.
   proves the separable learning-time integral `u_int` (`learningTime_integral`, second FTC) and
   the `t→∞` asymptotics `uf → s` (`uf_tendsto_atTop`).
 
-Remaining: the optional rectangular-diagonal `S` generalization (non-square `Σ³¹`),
-general *unbalanced* manifold init, the infinite-depth limit (`inf_dyn`/`inf_tc`), and
-symmetric-manifold forward-invariance in time.
-(Phase E SVD existence — done for any square `Sg`; Phase D option 3 forward-invariance —
-done; depth-`N` scalar law `deep_dyn` — done, `DeepDynamics.lean`; **depth-`N` matrix reduction
-end-to-end — done**: `multilayer_dyn` Phase A `DeepMatrixFlow.lean`, change of variables + mode
-extraction Phases B–C `DeepReduction.lean` (`deep_dyn_of_gradFlow`), equal-square layers;
-**time equation — done**: `t→∞` limit + learning-time integral `u_int`, `TimeEquation.lean`.)
+**The analytical core is complete.** Remaining genuine generalizations: the rectangular-diagonal
+`S` (non-square `Σ³¹`) SVD/depth-`N` reduction, and the unbalanced learning-*time* integral
+(Appendix A; the `u`-dynamics is done in `UnbalancedDynamics.lean`).
+Done: Phase E SVD existence (any square `Sg`); Phase D option 3 forward-invariance; depth-`N`
+scalar law `deep_dyn` (`DeepDynamics`); **depth-`N` matrix reduction end-to-end** (`multilayer_dyn`
+Phase A `DeepMatrixFlow`, change of variables + mode extraction Phases B–C `DeepReduction`,
+`deep_dyn_of_gradFlow`) + **forward-invariance** (`DeepManifoldInvariance`); **time equation**
+(`t→∞` limit + integral `u_int`, `TimeEquation`); **infinite-depth limit** (`inf_dyn`/`inf_tc`,
+`InfiniteDepth`); **unbalanced dynamics** (Appendix A, `UnbalancedDynamics`).
 
 ## Critical
 

@@ -50,16 +50,24 @@ correlation matrix). Modules:
   (`u_f → s`, via `uf = s/(1 + (s/u₀−1)e^{−2st/τ})` and `e^{−…} → 0`) and the separable
   learning-time integral `learningTime_integral` (Eq. `u_int`, FTC on the antiderivative
   `(1/2s)(ln u − ln(s−u))`).
+- `InfiniteDepth.lean` (`N_l → ∞`) — `deepNonlinearity_tendsto` (`deep_dyn`'s nonlinearity
+  `u^{2−2/(N_l−1)} → u²`, the `inf_dyn` form, via rpow continuity) and `infLearningTime_integral`
+  (Eq. `inf_tc`, FTC on `(1/s²)(ln u − ln(s−u)) − 1/(su)`).
+- `UnbalancedDynamics.lean` (Appendix A, `a ≠ b`) — `u = ab` obeys `τ u' = (a²+b²)(s−u) =
+  √(c₀²+4u²)(s−u)` (`hyperbolic_dyn`/`hyperbolic_dyn_sqrt`), the product-rule generalization of
+  `sigmoidal_dyn` (avoids the paper's typo'd θ-parametrization; `c₀=0` recovers `2u(s−u)`).
+- `DeepManifoldInvariance.lean` (depth-`N` forward-invariance) — `deep_manifold_invariant`:
+  equal layer scalars at `t=0` stay equal (ODE uniqueness on the `IsDeepFlow` field `deepField`,
+  reusing `eq_of_autonomous_ode`), giving the initial-condition-only `deep_dyn_of_deepFlow_init`.
 
-**Next steps (agreed direction):**
-1. **Infinite-depth limit** — `τ u' = N_l u²(s − u)` (Eq. `inf_dyn`) and its learning
-   time `t(u)` (Eq. `inf_tc`), the `N_l → ∞` companion of `deep_dyn` (a closed-form integral
-   like `learningTime_integral`, plus the exponent-limit framing).
-2. **Symmetric-manifold forward-invariance in time** — the depth-`N` analog of
-   `ManifoldInvariance` (ODE uniqueness), discharging the diagonality-in-frame hypothesis
-   of `DeepReduction`.
-3. **Unbalanced / hyperbolic dynamics** (`a ≠ b`, Appendix A) and **rectangular `Σ³¹`** —
-   long-deferred generalizations; add as real theorems when the time comes.
+**The analytical core of Saxe (2014) is essentially complete.** Remaining (genuine
+generalizations, not yet started):
+1. **Rectangular `Σ³¹`** — generalize the SVD reduction (`SVDReduction`/`ModeDynamics`/
+   `SVDExistence`) and the depth-`N` reduction to non-square correlation matrices. Substantial.
+2. **Unbalanced learning-*time* integral** (Appendix A) — `∫ du/(√(c₀²+4u²)(s−u))`; the
+   `u`-*dynamics* is done (`UnbalancedDynamics`), only the messy hyperbolic integral remains.
+Out of scope (paper's analysis/experimental sections): optimal discrete-time learning rates,
+MNIST experiments, pretraining, generalization error, dynamical isometry, simulations.
 
 Also deferred: unbalanced / hyperbolic dynamics (Appendix A, `a ≠ b`; the manifold theorem
 already takes scalar solutions as a hypothesis) and rectangular `Σ³¹`. Do not stub any of
@@ -198,7 +206,11 @@ After completing each proof, reflect on what worked and what didn't. If there's 
 
 **Prove a `t → ∞` limit of a rational-exponential by rewriting with a *decaying* exponential, then composing `Tendsto`.** For `uf → s` (`uf_tendsto_atTop`): first `uf = s/(1 + (s/u₀−1)e^{−2st/τ})` (`uf_eq_div_one_add`; prove `1+(s/u₀−1)e^{−x} = denom·e^{−x}` by `Real.exp_neg`+`field_simp`+`ring`, then `field_simp`). Then `e^{−2st/τ} → 0` via `simp only [Real.exp_neg]; (Real.tendsto_exp_atTop.comp hslope).inv_tendsto_atTop` where `hslope : (fun t => 2st/τ) → atTop` is `(rw to (2s/τ)*t); Tendsto.const_mul_atTop (by positivity) tendsto_id`; denom `→ 1` by `(hexp0.const_mul _).const_add 1`; finish `tendsto_const_nhds.div hdenom one_ne_zero` (`s/1`), `rw [div_one]`, `.congr` the `uf` identity.
 
-**Evaluate a definite integral by the second FTC + an explicit antiderivative.** `learningTime_integral` (Eq. `u_int`): `intervalIntegral.integral_eq_sub_of_hasDerivAt hderiv hint : ∫ u in a..b, f' u = F b − F a`. `hderiv : ∀ x ∈ Set.uIcc a b, HasDerivAt F (f' x) x` — `rw [Set.uIcc_of_le hf] at hx` to get `Set.Icc`, build the log-derivative `(Real.hasDerivAt_log hsx.ne').comp x ((hasDerivAt_const x s).sub (hasDerivAt_id x))` for `log(s−u)`, combine `.sub`/`.const_mul`, and **retarget the value by `rw [show f' = <combinator value> from by field_simp; ring]; exact h3`** (NOT `convert`, which spawns instance/`fun`-eq subgoals through `HasDerivAt`). `hint` via `ContinuousOn.intervalIntegrable` + `ContinuousOn.div` (the denom-`≠0` goal isn't β-reduced — `show 2*x*(s−x) ≠ 0` then `positivity`). Finish by `simp only [hF]` (β-reduce `F b`, `F a`) and `Real.log_div`/`Real.log_mul` (all args `≠ 0` by `positivity`) + `ring`.
+**Evaluate a definite integral by the second FTC + an explicit antiderivative.** `learningTime_integral` (Eq. `u_int`): `intervalIntegral.integral_eq_sub_of_hasDerivAt hderiv hint : ∫ u in a..b, f' u = F b − F a`. `hderiv : ∀ x ∈ Set.uIcc a b, HasDerivAt F (f' x) x` — `rw [Set.uIcc_of_le hf] at hx` to get `Set.Icc`, build the log-derivative `(Real.hasDerivAt_log hsx.ne').comp x ((hasDerivAt_const x s).sub (hasDerivAt_id x))` for `log(s−u)`, combine `.sub`/`.const_mul`, and **retarget the value by `rw [show f' = <combinator value> from by field_simp; ring]; exact h3`** (NOT `convert`, which spawns instance/`fun`-eq subgoals through `HasDerivAt`). `hint` via `ContinuousOn.intervalIntegrable` + `ContinuousOn.div` (the denom-`≠0` goal isn't β-reduced — `show 2*x*(s−x) ≠ 0` then `positivity`). Finish by `simp only [hF]` (β-reduce `F b`, `F a`) and `Real.log_div`/`Real.log_mul` (all args `≠ 0` by `positivity`) + `ring`. (`InfiniteDepth`'s `inf_tc` is the same recipe with `1/(u²(s−u))` and a `−(1/s)·u⁻¹` antiderivative term, `hasDerivAt_inv`.)
+
+**Compose a `rpow`-in-the-exponent limit / continuity.** `deepNonlinearity_tendsto` (`u^{2−2/m} → u²`): `(Real.continuousAt_const_rpow hu.ne').tendsto.comp hexp` where `hexp : (fun m => 2 − 2/(m:ℝ)) → 2` (`tendsto_one_div_atTop_nhds_zero_nat.const_mul`, normalize `2·(1/m)→2/m` with `mul_one_div`); bridge `u^(2:ℝ) = u^2` by `rw [← Real.rpow_natCast u 2]; norm_num`.
+
+**Reuse `eq_of_autonomous_ode` for any finite-dim invariant-manifold-via-uniqueness proof.** For depth-`N` symmetric-manifold forward-invariance (`deep_manifold_invariant`) the state space is `Fin m → ℝ`: package the `IsDeepFlow` RHS as `deepField`, prove it `ContDiff` with `contDiff_pi.2` + `ContDiff.div_const`/`.mul`/`.sub` and **`contDiff_prod (fun i _ => contDiff_pi.1 contDiff_id i)`** for each `∏ vᵢ` (the projections are `ContDiff`). The two solutions are `fun s => fun l => a l s` (`hasDerivAt_pi.2 (fun l => h.ha l t)`, derivative defeq to `deepField …`) and the constant-vector `fun s => fun _ => c s` (whose `deepField` value collapses by `Finset.prod_const`+`card_univ`/`card_erase_of_mem` to the `IsDeepSymFlow` value). `congrFun (… t) l` reads off `a l t = c t`.
 
 ## Mathlib API Reference (build out as we go)
 
