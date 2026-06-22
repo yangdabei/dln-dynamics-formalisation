@@ -26,10 +26,20 @@ correlation matrix). Modules:
   hypothesis-free balanced headline.
 - `SVDExistence.lean` (Phase E) — SVD *existence* for any square `Sg` (`exists_isSVD`),
   discharging `IsSVD`; end-to-end `exists_mode_dynamics_of_gradFlow`.
+- `DeepDynamics.lean` (depth-`N`) — the **depth-`N` law** (Eq. `deep_dyn`): full `m`-scalar
+  deep gradient flow `IsDeepFlow` on `E = (1/2τ)(s − ∏ aᵢ)²`, conserved quantities
+  `aᵢ² − aⱼ²` (`deepFlow_conserved`), symmetric reduction (`isDeepSymFlow_of_symmetric`), and
+  `u = aᵐ` obeying `τ u' = (N_l−1) u^{2−2/(N_l−1)}(s − u)` (`deep_dyn`), recovering
+  `sigmoidal_dyn` at `m = 2` (`deepSym_hasDerivAt_two`).
 
 **Next steps (agreed direction):**
-1. **Depth-`N` law (Eq. `deep_dyn`)** — generalize the 3-layer result to `N` layers
-   (a genuinely new theorem, the larger undertaking).
+1. **Depth-`N` matrix reduction** — the scalar headline `deep_dyn` is DONE
+   (`DeepDynamics.lean`). What remains is the depth-`N` analog of Phases A–C: derive
+   `IsDeepFlow` from the `N_l`-layer matrix gradient descent `multilayer_dyn`
+   (Eq. `multilayer_dyn`) via the layerwise `Rₗ` change of variables, plus
+   forward-invariance of the symmetric submanifold (the depth-`N` analog of
+   `ManifoldInvariance`). Also the **infinite-depth** limit `τ u' = N_l u²(s − u)`
+   (Eq. `inf_dyn`) and its learning time (Eq. `inf_tc`).
 2. **Time equation** — the `t → ∞` limit `uf → s` and the learning-time integral
    `t(u)`/`u_int` (`ClosedForm` currently verifies the *solution*, not the integration
    or the asymptotics).
@@ -92,6 +102,10 @@ After completing each proof, reflect on what worked and what didn't. If there's 
 **Keep an opaque subterm (e.g. `Real.exp (2*s*t/τ)`) as a single `ring` atom** by building it from ONE shared `HasDerivAt` for the inner function, so every occurrence is *syntactically identical*. `ring` treats it as one variable only if the terms match exactly — a differently-associated inner argument silently becomes a second atom and `ring` fails.
 
 **Prefer `pow_two` + `.mul` over `.pow 2`** when the result feeds `ring`/`rw`/`exact`: `.pow n` emits `↑n * f x ^ (n-1) * f'` with a `Nat.cast` and an unreduced `n-1` that trip term-matching. `(h.mul h)` is cast-free.
+
+**For a *symbolic* exponent `m`, `.pow m` IS the right tool — retarget its value by `rw [show … by ring, hpow]`.** The depth-`N` law `deepSym_hasDerivAt` needs `(fun r => a r ^ m)'`; `(h.ha t).pow m : HasDerivAt _ (↑m * a t^(m-1) * a') t`. Collapse the doubled power with `hpow : a t^(m-1) * a t^(m-1) = a t^(2*(m-1)) := by rw [← pow_add, two_mul]`, applied after a `ring` step that exposes the pair: `rw [show ↑m * a t^(m-1) * (… * a t^(m-1) / τ) = ↑m * … * (a t^(m-1) * a t^(m-1)) / τ from by ring, hpow] at key`. Then `exact key`. (`(m:ℝ)` literally matches the `↑m` that `.pow` emits.)
+
+**Specialize a general `HasDerivAt` at a numeral exponent with `norm_num at key`.** To derive the `m = 2` case from a `∀ m` lemma: `have key := general h t; norm_num at key` reduces `↑(2:ℕ) → 2` and the Nat exponent `2*(2-1) → 2` in `key`'s value in one shot; a final `rw [show … by ring] at key; exact key` reorders factors to the target. (`deepSym_hasDerivAt_two` ↔ `sigmoidal_dyn` cross-check.)
 
 **Confirm gap-freeness with `#print axioms <thm>`** (or `lean_verify`): expect `[propext, Classical.choice, Quot.sound]`. A `sorryAx` is a real hole that the text-based sorry-gate won't catch if it entered via a dependency.
 
@@ -171,6 +185,8 @@ Finset sums (`Mathlib/Algebra/BigOperators/*`), for the network square loss:
 - `Finset.sum_congr rfl (fun i _ => by ring)`  (close `∑ f = ∑ g` term-by-term)
 - `Finset.sum_eq_single a (h_ne : ∀ b ∈ s, b ≠ a → f b = 0) (h_mem : a ∉ s → f a = 0) : ∑ x ∈ s, f x = f a`  (collapse a sum to one surviving term — picks out the `single`-selected index)
 - `Finset.sum_apply : (∑ k ∈ s, g k) i = ∑ k ∈ s, g k i`  (sum-of-functions ↦ function-of-sum; the bridge after `HasDerivAt.sum`)
+- `Finset.prod_erase_mul s f (h : a ∈ s) : (∏ x ∈ s.erase a, f x) * f a = ∏ x ∈ s, f x`  (and `Finset.mul_prod_erase` for the other order) — the workhorse of the depth-`N` conservation `deepFlow_conserved`: `(∏_{k≠i} aₖ)·aᵢ = ∏ₖ aₖ` makes `aᵢ aᵢ'` independent of `i`, so `d/dt(aᵢ²−aⱼ²)=0` closes by `ring` after `rw [hPi, hPj, sub_self]`
+- `Finset.prod_const : ∏ _x ∈ s, c = c ^ s.card`;  `Finset.card_erase_of_mem (h : a ∈ s) : (s.erase a).card = s.card − 1`;  `Finset.card_univ`/`Fintype.card_fin : (univ : Finset (Fin m)).card = m`  (collapse `∏ᵢ c = cᵐ`, `∏_{i≠l} c = cᵐ⁻¹` on the symmetric submanifold — `isDeepSymFlow_of_symmetric`)
 
 Matrix (`Mathlib/Data/Matrix/*`, `Mathlib/Analysis/Matrix/*`), for the three-layer flow (`open Matrix` for the scoped normed instances + `ᵀ` notation):
 - `Matrix.single i j a` — single-entry matrix (formerly `stdBasisMatrix`); `Matrix.single_apply : single i j a i' j' = if i = i' ∧ j = j' then a else 0`
@@ -187,6 +203,12 @@ Real / order lemmas used:
 - `Real.exp_pos`, `Real.exp_zero`
 - `one_lt_div (hb : 0 < b) : 1 < a / b ↔ b < a`
 - `div_eq_iff (hc : c ≠ 0) : a / c = b ↔ a = b * c`
+- real-power bridge (`Mathlib/Analysis/SpecialFunctions/Pow/*`), for the depth-`N`
+  law's `(aᵐ)^{2−2/m} = a^{2(m−1)}` (`rpow_bridge`): `Real.rpow_natCast x n : x^(n:ℝ) = x^n`
+  (use `←` to lift a Nat power into rpow), `Real.rpow_mul (hx : 0 ≤ x) y z : x^(y*z) = (x^y)^z`
+  (use `←` to fold `(x^y)^z`), then close the exponent identity `m·(2−2/m) = ↑(2(m−1))` with
+  `push_cast [Nat.cast_sub hm]; field_simp` (`Nat.cast_sub (h : n ≤ m) : (↑(m−n) : ℝ) = ↑m − ↑n`
+  is mandatory — `push_cast` won't touch Nat subtraction without it)
 
 Forward pointers (not yet used):
 - Per-coordinate gradient flow chosen over abstract `gradient` (Layer 1, done): raw `ℝ×ℝ` carries the sup-norm, *not* an inner product, so `gradient`/`HasGradientAt` would need `EuclideanSpace ℝ (Fin 2)` or `WithLp 2 (ℝ×ℝ)`. If a true `∇` form is ever wanted: `Mathlib/Analysis/Calculus/Gradient/Basic.lean`, bridged via `hasGradientAt_iff_hasFDerivAt`.

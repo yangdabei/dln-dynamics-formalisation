@@ -4,6 +4,38 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
+## Session 2026-06-22 — Depth-`N` law DONE (scalar headline, Saxe Eq. `deep_dyn`)
+
+**Done.** `DlnDynamics/DeepDynamics.lean` — the depth-`N` generalization of the reduced mode
+dynamics. Gap-free (`#print axioms` = `[propext, Classical.choice, Quot.sound]` on `deep_dyn`,
+`deepFlow_conserved`, `deep_dyn_of_deepFlow`, `deepSym_hasDerivAt_two`), `lake build` clean, no
+`sorry`. Numerically pre-checked (conservation residual ~1e-16, `deep_dyn` residual ~1e-8 over
+random depths/params; RK4-integrated trajectories).
+
+For an `N_l`-layer net with `m = N_l − 1` weight matrices, each connectivity mode is `m` scalars
+`a₁,…,aₘ` doing gradient descent on the deep energy `E = (1/2τ)(s − ∏ᵢ aᵢ)²`:
+- **`IsDeepFlow`** — the `m`-scalar flow `τ aₗ' = (s − ∏ᵢ aᵢ)·∏_{i≠l} aᵢ` (the honest start).
+- **`deepFlow_conserved` / `_eq`** — `aᵢ² − aⱼ²` constant of motion at *every* depth (depth-`N`
+  analog of `ab_conserved`). Clean proof: `(∏_{k≠i} aₖ)·aᵢ = ∏ₖ aₖ` (`Finset.prod_erase_mul`)
+  makes `aᵢ aᵢ'` independent of `i`, so the product-rule derivative of `aᵢ² − aⱼ²` is `0` by `ring`.
+- **`isDeepSymFlow_of_symmetric`** — algebraic reduction onto the symmetric submanifold
+  `a₁=⋯=aₘ=c`: `∏ᵢ c = cᵐ` (`prod_const` + `card_univ`/`Fintype.card_fin`), `∏_{i≠l} c = cᵐ⁻¹`
+  (`card_erase_of_mem`), so `c` obeys `τ c' = (s − cᵐ)cᵐ⁻¹` (`IsDeepSymFlow`).
+- **`deepSym_hasDerivAt`** (Nat-power form) and **`deep_dyn`** (paper's rpow form) — the headline:
+  `u = aᵐ` obeys `τ u' = (N_l−1) u^{2−2/(N_l−1)}(s − u)`. `HasDerivAt.pow m` gives
+  `(aᵐ)' = m·aᵐ⁻¹·a'`; `aᵐ⁻¹·aᵐ⁻¹ = a^{2(m−1)}` (`← pow_add`, `two_mul`). The rpow bridge
+  `(aᵐ)^{2−2/m} = a^{2(m−1)}` (`rpow_bridge`, `0<a`) is `Real.rpow_natCast` + `Real.rpow_mul`
+  with the exponent identity `m·(2−2/m) = 2(m−1)` (`push_cast [Nat.cast_sub hm]; field_simp`).
+- **`deep_dyn_of_deepFlow`** — end-to-end: `IsDeepFlow` + symmetric + positive ⇒ `deep_dyn`.
+- **`deepSym_hasDerivAt_two`** — consistency cross-check: at `m = 2` (`N_l = 3`) the depth-`N`
+  law collapses to the two-layer logistic `sigmoidal_dyn` `τ u' = 2u(s − u)`.
+
+**Deferred** (recorded in CLAUDE.md "Next steps"): the depth-`N` *matrix* reduction — deriving
+`IsDeepFlow` from the `N_l`-layer matrix gradient descent `multilayer_dyn` via the layerwise `Rₗ`
+change of variables (the depth-`N` analog of Phases A–C), plus forward-invariance of the
+symmetric submanifold (analog of `ManifoldInvariance`); the infinite-depth limit `inf_dyn`/`inf_tc`;
+and the time equation (`t → ∞` limit, learning-time integral `u_int`).
+
 ## Session 2026-06-22 — Phase E DONE in full (SVD existence, any square matrix)
 
 **Done.** `DlnDynamics/SVDExistence.lean` — *constructs* a singular value decomposition of

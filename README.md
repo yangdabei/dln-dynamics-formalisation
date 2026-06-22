@@ -35,22 +35,39 @@ derived, not posited:
 | Mode extraction | `S` diagonal ⇒ per-mode `τ ȧᵅ = (sᵅ−bᵅ·aᵅ)bᵅ − ∑_{γ≠α}(bᵞ·aᵅ)bᵞ` (and `b_dyn`) | Eqs. `a_dyn`, `b_dyn` | `a_dyn`, `b_dyn` |
 | Manifold reduction | orthogonal-mode manifold ⇒ competition vanishes ⇒ scalar `τ a' = b(s−ab)` | §"time course", `ab_dyn` | `isABFlow_of_modeFlow` |
 
+**Deeper multilayer dynamics — the depth-`N` law.** For an `N_l`-layer network
+with `m = N_l − 1` weight matrices, each connectivity mode is `m` scalars
+`a₁,…,aₘ` doing gradient descent on the deep energy `E = (1/2τ)(s − ∏ᵢ aᵢ)²`:
+
+| Result | Statement | Saxe ref | Lean |
+| --- | --- | --- | --- |
+| Deep flow | `τ aₗ' = (s − ∏ᵢ aᵢ)·∏_{i≠l} aᵢ` | §"deeper", `multilayer_dyn` | `IsDeepFlow` |
+| Conservation | `aᵢ² − aⱼ²` is a constant of motion (every depth) | §"deeper" | `deepFlow_conserved`, `deepFlow_conserved_eq` |
+| Symmetric reduction | `a₁=⋯=aₘ` ⇒ common scalar obeys `τ a' = (s − aᵐ)aᵐ⁻¹` | §"deeper" | `IsDeepSymFlow`, `isDeepSymFlow_of_symmetric` |
+| **Depth-`N` law** | `u = aᵐ` obeys `τ u' = (N_l−1) u^{2−2/(N_l−1)}(s − u)` | Eq. `deep_dyn` | `deep_dyn`, `deepSym_hasDerivAt` |
+| `N_l = 3` check | the depth-`N` law collapses to `τ u' = 2u(s − u)` | Eq. `sigmoidal_dyn` | `deepSym_hasDerivAt_two` |
+
 **Scope/honesty.** The matrix flow `wb_avg`, the SVD change of variables `wbo_dyn`
 (given an SVD of `Σ³¹` *as a hypothesis*, `IsSVD`), and the per-mode `a_dyn`/`b_dyn`
 (diagonal `S`, square case) are established — composed end-to-end as
 `a_dyn_of_gradFlow`/`b_dyn_of_gradFlow`. On the orthogonal-mode manifold this reduces to
 the scalar `ab_dyn` (`isABFlow_of_modeFlow`, `isABFlow_of_gradFlow_on_manifold`), closing
 the chain `network loss → wb_avg → wbo_dyn → a_dyn/b_dyn → ab_dyn` into the conservation
-law and closed form of Layers 1–2. The manifold reduction takes
-membership-for-all-time as a hypothesis; the **forward-invariance in time** of the
-manifold (Saxe's "remain parallel for all future time") is the one remaining gap in this
-chain, an ODE-uniqueness argument (Phase D option 3).
+law and closed form of Layers 1–2. The **forward-invariance in time** of the
+orthogonal-mode manifold is discharged via ODE uniqueness
+(`ManifoldInvariance.lean`), and **SVD existence** for any square `Σ³¹` is
+constructed (`SVDExistence.lean`, `exists_isSVD`), so the 3-layer chain is
+gap-free end to end. For the depth-`N` law, the scalar headline `deep_dyn` and the
+conservation law are gap-free; the full matrix → `m`-scalar reduction of
+`multilayer_dyn` via the layerwise `Rₗ` change of variables (the depth-`N` analog
+of Phases A–C) and forward-invariance of the symmetric submanifold are deferred.
 
-**Deferred** (future work): forward-invariance of the manifold (Phase D option 3) and
-**SVD existence** (Phase E, discharging the `IsSVD` hypothesis), plus the
-rectangular-diagonal `S` generalization (see `PROGRESS.md`); the `t → ∞` limit
-`u_f → s`, ODE uniqueness, and the depth-`N` generalization
-`τ u' = (N−1) u^{2−2/(N−1)}(s − u)` (Eq. `deep_dyn`).
+**Deferred** (future work): the depth-`N` matrix reduction and symmetric-manifold
+forward-invariance (above); the infinite-depth limit `τ u' = N_l u²(s − u)`
+(Eq. `inf_dyn`) and its learning time (Eq. `inf_tc`); the `t → ∞` limit
+`u_f → s` and the separable learning-time integral `t(u)` (Eq. `u_int`); the
+unbalanced/hyperbolic `a ≠ b` dynamics (Appendix A); and the rectangular-diagonal
+`Σ³¹` generalization (see `PROGRESS.md`).
 
 ## Build
 
@@ -79,6 +96,9 @@ DlnDynamics/MatrixFlow.lean    Ematrix, matrixFlow_of_gradFlow            (Layer
 DlnDynamics/SVDReduction.lean  IsSVD, sum_sq_mul_orthogonal, wbo_dyn_of_gradFlow  (Layer 3, Phase B)
 DlnDynamics/ModeDynamics.lean  aMode/bMode, a_dyn/b_dyn, a_dyn_of_gradFlow (Layer 3, Phase C)
 DlnDynamics/InvariantManifold.lean competition_vanishes, isABFlow_of_modeFlow (Layer 3, Phase D opt 1)
+DlnDynamics/ManifoldInvariance.lean manifold_forward_invariant            (Layer 3, Phase D opt 3)
+DlnDynamics/SVDExistence.lean  exists_isSVD, exists_mode_dynamics_of_gradFlow (Layer 3, Phase E)
+DlnDynamics/DeepDynamics.lean  IsDeepFlow, deepFlow_conserved, deep_dyn   (depth-N law, Eq. deep_dyn)
 scripts/no_sorry.sh            sorry / axiom gate (also run in CI)
 scripts/check_closed_form.py   numerical sanity check (ODE closed form)
 scripts/check_svd_reduction.py numerical sanity check (change of vars + a_dyn)

@@ -36,8 +36,10 @@ items below are kept verbatim as the review, with status noted here.
   **Medium 1 (integration argument in `ClosedForm`)** — unchanged, an honest accepted gap.
 
 Remaining: the optional rectangular-diagonal `S` generalization (non-square `Σ³¹`),
-general *unbalanced* manifold init, and the `t→∞` limit. (Phase E SVD existence — done
-for any square `Sg`; Phase D option 3 forward-invariance — done.)
+general *unbalanced* manifold init, the `t→∞` limit / learning-time integral, and the
+depth-`N` *matrix* reduction + infinite-depth limit. (Phase E SVD existence — done for any
+square `Sg`; Phase D option 3 forward-invariance — done; depth-`N` scalar law `deep_dyn` —
+done, `DeepDynamics.lean`.)
 
 ## Critical
 
