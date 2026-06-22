@@ -11,3 +11,4 @@ import DlnDynamics.MatrixFlow
 import DlnDynamics.SVDReduction
 import DlnDynamics.ModeDynamics
 import DlnDynamics.InvariantManifold
+import DlnDynamics.ManifoldInvariance

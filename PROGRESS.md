@@ -4,7 +4,40 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
-## Next session — Phase D option 3 (forward-invariance, parallel), then E (SVD existence)
+## Session 2026-06-22 — Phase D option 3 DONE (forward-invariance via ODE uniqueness)
+
+**Done.** `DlnDynamics/ManifoldInvariance.lean` — forward-invariance *in time* of the
+orthogonal-mode manifold (Saxe's *"`aᵅ` and `bᵅ` will remain parallel to `rᵅ` for all future
+time"*), discharging option 1's manifold-for-all-`t` hypothesis. Full chain, gap-free
+(`#print axioms` = `[propext, Classical.choice, Quot.sound]`), `lake build` clean, no `sorry`.
+
+The argument (each step a named lemma, mirroring the paper proof):
+- **Lift** scalar `ab_dyn` solutions to barred matrices `aLift`/`bLift` (column/row `α` =
+  `cα t • rᵅ`); `aMode_aLift`/`bMode_bLift` land them on the manifold.
+- **Lift solves `wbo_dyn`** (`aLift_solves`/`bLift_solves`) — "option 1 run backwards": reuse
+  `flow_a_entry`/`flow_b_entry` + `competition_vanishes` (orthonormality kills the competition).
+- **Uniqueness** (`eq_of_autonomous_ode`, `trajectory_eq_lift`): package both matrix flows on the
+  product state via `HasDerivAt.prodMk`; the field `flowField` is a matrix polynomial, hence
+  `C^∞` (`flowField_contDiff`, proved entrywise) and locally Lipschitz on closed balls
+  (`ContDiffOn.exists_lipschitzOnWith`); `ODE_solution_unique_of_mem_Ioo` on `Ioo (-T) T` for
+  `T=|t|+1` ⇒ trajectory = lift ∀`t`.
+- **Forward-invariance** (`manifold_forward_invariant`) reads membership off that equality.
+- **Constructive balanced solution** (`uf_pos`, `isABFlow_sqrt_uf`): `a=b=√∘uf` solves `ab_dyn`
+  via `HasDerivAt.sqrt` + `uf_hasDerivAt`. Headlines `isABFlow_of_modeFlow_of_init` /
+  `isABFlow_of_gradFlow_of_init` are then **hypothesis-free** (only a balanced paper-regime init
+  `aᵅ(0)=bᵅ(0)=√(u₀ α)·rᵅ`, `0<u₀ α<σ α`) — no manifold and no solution hypothesis.
+
+Key gotcha (now in CLAUDE.md): matrix `ContDiff`/ODE lemmas need `open scoped
+Matrix.Norms.Elementwise` (plain `open Matrix` does not register the folded-`Matrix` norm
+instance; it is defeq to the `Pi` one matrix `HasDerivAt` already uses — no diamond). Numerics:
+`scripts/check_manifold_invariance.py` (parallelism residual ~1e-14 under RK4).
+
+**Deferred / next.** General *unbalanced* orthogonal-mode init needs scalar existence
+(Picard–Lindelöf + global a-priori bound) — `manifold_forward_invariant` already takes scalar
+solutions as a hypothesis, so this only upgrades the construction. Then **Phase E** — SVD
+existence (discharge `IsSVD`). Remaining Phase-C cleanup: rectangular-diagonal `S`.
+
+## Earlier plan — Phase D option 3 (forward-invariance, parallel), then E (SVD existence)
 
 Layers 1–2 and **Layer-3 Phases A, B, C, and D-option-1 are done.** Phase A: the
 matrix flow `wb_avg` from gradient descent (`MatrixFlow.lean`). **Phase B**
