@@ -4,41 +4,49 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
-## Session 2026-06-22 — Phase E DONE (SVD existence, square full-rank case)
+## Session 2026-06-22 — Phase E DONE in full (SVD existence, any square matrix)
 
-**Done.** `DlnDynamics/SVDExistence.lean` — *constructs* a singular value decomposition,
-discharging the `IsSVD` hypothesis that Phase B carried. Full chain gap-free (`#print axioms`
-= `[propext, Classical.choice, Quot.sound]`), `lake build` clean, no `sorry`.
+**Done.** `DlnDynamics/SVDExistence.lean` — *constructs* a singular value decomposition of
+**any** square real `Sg`, discharging the `IsSVD` hypothesis Phase B carried unconditionally.
+Gap-free (`#print axioms` = `[propext, Classical.choice, Quot.sound]`), `lake build` clean, no
+`sorry`. Built in two passes (full-rank first, then the rank-deficient general case).
 
-**Scope: square, full-rank** (user-confirmed). `exists_isSVD_of_isUnit`: every *invertible*
-square real `Sg` admits `Sg = U (diagonal σ) Vᵀ` with `U`,`V` orthogonal. Full rank is exactly
-what lets the left factor be written explicitly — `U := Sg V (diagonal σ)⁻¹`, no orthonormal
-completion (the basis-extension sink) needed. This is the square shape every consumer uses
-(`ModeDynamics`, `ManifoldInvariance` all fix `U V : Matrix (Fin N)(Fin N) ℝ`, `S = diagonal σ`).
+Both passes share the spectral start: `Sgᵀ Sg` Hermitian PSD (`posSemidef_transpose_mul_self`);
+the **real spectral adapter** `real_spectral`/`eigenvectorMatrix_orthogonal` unfolds Mathlib's
+`spectral_theorem` (`conjStarAlgAut`/`unitaryGroup`/`RCLike.ofReal` form) to plain
+`Sgᵀ Sg = V (diagonal d) Vᵀ` with `Vᵀ V = 1` (`Unitary.conjStarAlgAut_apply`,
+`Unitary.coe_star_mul_self`, `star = ᵀ` over ℝ); `σ i := √(d i)`, `d i ≥ 0` from PSD.
 
-The construction (each step a named lemma, mirroring the standard proof + the numeric check):
-- **Gram PD** (`posSemidef_transpose_mul_self`, `posDef_transpose_mul_self_of_isUnit`): `Sgᵀ Sg`
-  is Hermitian PSD (`posSemidef_conjTranspose_mul_self` + `conjTranspose = transpose` over ℝ),
-  and PD since `det(Sgᵀ Sg)=(det Sg)²≠0` via `PosSemidef.posDef_iff_det_ne_zero`.
-- **Real spectral adapter** (`real_spectral`, `eigenvectorMatrix_orthogonal`): unfold Mathlib's
-  `spectral_theorem` (`conjStarAlgAut`/`unitaryGroup`/`RCLike.ofReal` form) to plain
-  `Sgᵀ Sg = V (diagonal d) Vᵀ` with `Vᵀ V = 1` (`Unitary.conjStarAlgAut_apply`,
-  `Unitary.coe_star_mul_self`, `star = ᵀ` over ℝ); eigenvalues `d i>0` from `PosDef.eigenvalues_pos`.
-- **Assemble** (`isSVD_of_spectral`): `σ i=√(d i)`, `U=Sg V (diagonal σ)⁻¹` (pointwise-inverse
-  diagonal). `Uᵀ U = σ⁻¹ (Vᵀ V) D (Vᵀ V) σ⁻¹ = σ⁻¹ D σ⁻¹ = 1` and `U (diagonal σ) Vᵀ = Sg V Vᵀ = Sg`
-  are **pure matrix-cancellation algebra** (the `SVDReduction.lean` regroup-and-cancel style).
-- **End-to-end discharge** (`exists_mode_dynamics_of_gradFlow_of_isUnit`): compose with
-  `a_dyn_of_gradFlow`/`b_dyn_of_gradFlow` (`hdiag := rfl`) ⇒ network gradient descent on an
-  invertible `Sg` obeys `a_dyn`/`b_dyn` in *some* SVD frame, **with no SVD assumed**.
+- **Full-rank (explicit), `exists_isSVD_of_isUnit`.** For invertible `Sg`, `det(Sgᵀ Sg)=(det Sg)²≠0`
+  gives `Sgᵀ Sg` PosDef (`posDef_transpose_mul_self_of_isUnit`, via `posDef_iff_det_ne_zero`), so
+  every `σ i>0` and the left factor is the *explicit* `U=Sg V (diagonal σ)⁻¹` (pointwise-inverse
+  diagonal). `Uᵀ U = σ⁻¹(Vᵀ V)D(Vᵀ V)σ⁻¹ = 1` and `Sg = U(diagonal σ)Vᵀ` are pure
+  matrix-cancellation algebra (`isSVD_of_spectral`).
+- **General / rank-deficient, `exists_isSVD` (no hypothesis).** Reduced to a self-contained
+  **`column_completion`**: `Aᵀ A = diagonal(σ²)`, `σ≥0` ⟹ `∃ U, Uᵀ U=1 ∧ U(diagonal σ)=A`. The
+  `σ i>0` columns of `A := Sg V` normalized are orthonormal (their inner products are the
+  off-diagonal Gram entries = 0); `Orthonormal.exists_orthonormalBasis_extension_of_card_eq`
+  completes them to an orthonormal basis indexed by `Fin N` **with no manual reindexing** (it
+  packs `exists_equiv_extend_of_card_eq` internally). The basis matrix
+  (`(basisFun).toBasis.toMatrix ⇑b`) is orthogonal for free
+  (`toMatrix_orthonormalBasis_mem_unitary`) and `U i j = (b j) i` by `rfl`; at `σ j=0`, column
+  `j` of `A` is `0` (its squared norm is the Gram diagonal `σ j²=0`) so both sides of
+  `U(diagonal σ)=A` vanish — the zero-singular-value columns of `U` are the *free* completion.
+- **End-to-end discharge** (`exists_mode_dynamics_of_gradFlow`, now unconditional): compose with
+  `a_dyn_of_gradFlow`/`b_dyn_of_gradFlow` (`hdiag := rfl`) ⇒ network gradient descent on *any*
+  square `Sg` obeys `a_dyn`/`b_dyn` in *some* SVD frame, **with no SVD assumed**.
 
-Numerics: `scripts/check_svd_existence.py` (stdlib + Jacobi eigensolver): `U diag(σ) Vᵀ = Sg`
-to 5e-15, `VᵀV=1` to 2e-15, `UᵀU=1` to 1e-11, min singular value >0 (full rank confirmed).
+Key gotchas (now in CLAUDE.md): the real spectral adapter; building a Euclidean vector from a
+function via `(WithLp.equiv 2 (Fin N → ℝ)).symm` (a Pi-literal won't ascribe to `EuclideanSpace`);
+`⟪x,y⟫_ℝ = ∑ x i * y i` via `EuclideanSpace.inner_eq_star_dotProduct`; and `conv_lhs => rw [hgram]`
+to dodge the dependent-motive failure (`hH.eigenvalues` depends on `Sgᵀ Sg`).
 
-**Deferred / next.** Phase E **general (rank-deficient) case** — zero singular values need an
-orthonormal completion of `U` via `Orthonormal.exists_orthonormalBasis_extension` (with
-`Fin N ↔ {σ>0} ↔ complement` reindexing and a `Matrix ↔ EuclideanSpace` bridge); separate
-HIGH-risk milestone, not attempted. Also still open: general *unbalanced* manifold init
-(Picard–Lindelöf), the `t→∞` limit `uf→s`, and the optional rectangular-diagonal `S`.
+Numerics: `scripts/check_svd_existence.py` (stdlib + Jacobi): full-rank `U diag(σ) Vᵀ = Sg` to
+5e-15; general/rank-deficient (U via Gram-Schmidt completion) `UᵀU=1` to 4e-12 and reconstruction
+to 2e-8, rank deficiency up to 4.
+
+**Deferred / next.** Still open: general *unbalanced* manifold init (Picard–Lindelöf), the
+`t→∞` limit `uf→s`, and the optional rectangular-diagonal `S` (non-square `Σ³¹`).
 
 ## Session 2026-06-22 — Phase D option 3 DONE (forward-invariance via ODE uniqueness)
 

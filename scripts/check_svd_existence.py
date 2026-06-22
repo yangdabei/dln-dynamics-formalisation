@@ -55,6 +55,23 @@ def diag(d):
     return [[d[i] if i == j else 0.0 for j in range(n)] for i in range(n)]
 
 
+def dot(u, v):
+    return sum(x * y for x, y in zip(u, v))
+
+
+def random_orthogonal(n):
+    """Gram-Schmidt on random columns -> orthogonal matrix (orthonormal columns)."""
+    cols = []
+    for _ in range(n):
+        v = [random.gauss(0, 1) for _ in range(n)]
+        for q in cols:
+            c = dot(v, q)
+            v = [vi - c * qi for vi, qi in zip(v, q)]
+        nrm = math.sqrt(dot(v, v))
+        cols.append([vi / nrm for vi in v])
+    return transpose(cols)
+
+
 def max_abs_diff(A, B):
     return max(abs(A[i][j] - B[i][j])
                for i in range(len(A)) for j in range(len(A[0]))) if A and A[0] else 0.0
@@ -147,8 +164,69 @@ def check_svd_existence(trials=2000):
     return worst_uu, worst_vv, worst_fac, worst_spec, min_sigma
 
 
+# --- general (rank-deficient) case: column_completion -------------------
+def complete_orthonormal(cols, n):
+    """Extend orthonormal `cols` (in R^n) to a full orthonormal basis (list of n
+    vectors), appending Gram-Schmidt completions against the standard basis. Mirrors
+    the Lean `exists_orthonormalBasis_extension_of_card_eq`."""
+    basis = [c[:] for c in cols]
+    for e in range(n):
+        if len(basis) == n:
+            break
+        v = [1.0 if k == e else 0.0 for k in range(n)]
+        for q in basis:
+            c = dot(v, q)
+            v = [vi - c * qi for vi, qi in zip(v, q)]
+        nrm = math.sqrt(dot(v, v))
+        if nrm > 1e-9:
+            basis.append([vi / nrm for vi in v])
+    return basis
+
+
+def check_svd_existence_general(trials=2000):
+    """Singular Sg: build U by orthonormal completion (the rank-deficient construction
+    `column_completion`), then verify the SVD identities."""
+    worst_uu = 0.0
+    worst_fac = 0.0
+    max_rankdef = 0   # how rank-deficient the test matrices got
+    for _ in range(trials):
+        n = random.randint(2, 5)
+        k = random.randint(1, n - 1)                 # number of exact-zero singular values
+        s = [random.uniform(0.5, 2.5) for _ in range(n - k)] + [0.0] * k
+        random.shuffle(s)
+        # Sg = Q1 diag(s) Q2^T: singular values are exactly `s` (some 0) — cleanly
+        # separated from the Jacobi noise floor, unlike a generic low-rank product.
+        Sg = matmul(matmul(random_orthogonal(n), diag(s)), transpose(random_orthogonal(n)))
+        G = matmul(transpose(Sg), Sg)
+        d, V = jacobi_eig(G)
+        sigma = [math.sqrt(max(di, 0.0)) for di in d]
+        A = matmul(Sg, V)                            # A = Sg V, columns sigma_i * u_i
+        # normalized columns at sigma_i > 0  (these are orthonormal)
+        pos = [i for i in range(n) if sigma[i] > 1e-7]
+        max_rankdef = max(max_rankdef, n - len(pos))
+        u_pos = [[A[k][i] / sigma[i] for k in range(n)] for i in pos]  # as row-vectors
+        completion = complete_orthonormal(u_pos, n)  # u_pos first, then fillers
+        # place columns of U: sigma_i>0 -> its u_i; sigma_i=0 -> next filler
+        U = mat(n, n)
+        fillers = completion[len(u_pos):]
+        fi = 0
+        for i in range(n):
+            if sigma[i] > 1e-7:
+                col = u_pos[pos.index(i)]
+            else:
+                col = fillers[fi]
+                fi += 1
+            for k in range(n):
+                U[k][i] = col[k]
+        worst_uu = max(worst_uu, max_abs_diff(matmul(transpose(U), U), ident(n)))
+        recon = matmul(matmul(U, diag(sigma)), transpose(V))
+        worst_fac = max(worst_fac, max_abs_diff(recon, Sg))
+    return worst_uu, worst_fac, max_rankdef
+
+
 if __name__ == "__main__":
     wuu, wvv, wfac, wspec, smin = check_svd_existence()
+    print("== full-rank (explicit U = Sg V diag(sigma)^-1) ==")
     print(f"spectral residual G = V D V^T   max: {wspec:.2e}")
     print(f"U^T U = 1                       max: {wuu:.2e}")
     print(f"V^T V = 1                       max: {wvv:.2e}")
@@ -159,4 +237,13 @@ if __name__ == "__main__":
     assert wvv < 1e-10, wvv
     assert wfac < 1e-10, wfac
     assert smin > 0.0, smin
+
+    guu, gfac, rankdef = check_svd_existence_general()
+    print("== general / rank-deficient (U via orthonormal completion) ==")
+    print(f"U^T U = 1                       max: {guu:.2e}")
+    print(f"U diag(sigma) V^T = Sg          max: {gfac:.2e}")
+    print(f"max rank deficiency over trials    : {rankdef}  (>0 confirms singular cases hit)")
+    assert guu < 1e-7, guu
+    assert gfac < 1e-7, gfac
+    assert rankdef > 0, rankdef
     print("OK")
