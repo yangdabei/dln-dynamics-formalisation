@@ -33,15 +33,18 @@ items below are kept verbatim as the review, with status noted here.
 - **Medium 2 (lemma structure over comments)** — addressed; large rewrites factored into
   named lemmas mirroring the paper, now a standing rule in `CLAUDE.md`.
   **Medium 3 (conceptual chain over endpoint equations)** — addressed (composable chain).
-  **Medium 1 (integration argument in `ClosedForm`)** — unchanged, an honest accepted gap.
+  **Medium 1 (integration argument in `ClosedForm`)** — **now resolved**: `TimeEquation.lean`
+  proves the separable learning-time integral `u_int` (`learningTime_integral`, second FTC) and
+  the `t→∞` asymptotics `uf → s` (`uf_tendsto_atTop`).
 
 Remaining: the optional rectangular-diagonal `S` generalization (non-square `Σ³¹`),
-general *unbalanced* manifold init, the `t→∞` limit / learning-time integral, the
-infinite-depth limit (`inf_dyn`/`inf_tc`), and symmetric-manifold forward-invariance in time.
+general *unbalanced* manifold init, the infinite-depth limit (`inf_dyn`/`inf_tc`), and
+symmetric-manifold forward-invariance in time.
 (Phase E SVD existence — done for any square `Sg`; Phase D option 3 forward-invariance —
 done; depth-`N` scalar law `deep_dyn` — done, `DeepDynamics.lean`; **depth-`N` matrix reduction
 end-to-end — done**: `multilayer_dyn` Phase A `DeepMatrixFlow.lean`, change of variables + mode
-extraction Phases B–C `DeepReduction.lean` (`deep_dyn_of_gradFlow`), equal-square layers.)
+extraction Phases B–C `DeepReduction.lean` (`deep_dyn_of_gradFlow`), equal-square layers;
+**time equation — done**: `t→∞` limit + learning-time integral `u_int`, `TimeEquation.lean`.)
 
 ## Critical
 

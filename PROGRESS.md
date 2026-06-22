@@ -4,6 +4,27 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
+## Session 2026-06-22 — Milestone 2: the learning timescale (Saxe Eq. `u_int` + asymptotics)
+
+**Done.** `DlnDynamics/TimeEquation.lean` — the two time-equation facts of Saxe §"time course".
+Gap-free (`#print axioms` = `[propext, Classical.choice, Quot.sound]` on `uf_tendsto_atTop`,
+`learningTime_integral`), `lake build` clean, no `sorry`. Formulas numerically pre-checked
+(algebraic identity ~1e-16, limit ~1e-10, integral vs. numerical quadrature ~1e-11).
+
+- **`uf_tendsto_atTop`** — the sigmoid asymptotes: `u_f(t) → s` as `t → ∞`. Rewrite
+  `uf = s/(1 + (s/u₀−1) e^{−2st/τ})` (`uf_eq_div_one_add`), then `e^{−2st/τ} → 0`
+  (`Real.tendsto_exp_atTop` ∘ positive-slope `.inv_tendsto_atTop`), denom `→ 1`, `s/1 = s`.
+- **`learningTime_integral`** — the separable learning-time integral (Eq. `u_int`):
+  `∫_{u₀}^{u_f} du/(2u(s−u)) = (1/2s) ln(u_f(s−u₀)/(u₀(s−u_f)))`. Second FTC
+  (`intervalIntegral.integral_eq_sub_of_hasDerivAt`) on the antiderivative
+  `(1/2s)(ln u − ln(s−u))`; log-derivative via `Real.hasDerivAt_log` + chain rule, value
+  retargeted by `field_simp; ring`; integrability via `ContinuousOn.intervalIntegrable`;
+  finish with `Real.log_div`/`Real.log_mul`.
+
+This closes the long-standing "integration argument in `ClosedForm`" accepted gap (CRITICISMS
+Medium 1). **Next:** the infinite-depth limit (`inf_dyn`/`inf_tc`) and symmetric-manifold
+forward-invariance in time.
+
 ## Session 2026-06-22 — Depth-`N` MATRIX REDUCTION COMPLETE (Phases B–C: change of variables → IsDeepFlow)
 
 **Done.** `DlnDynamics/DeepReduction.lean` — the depth-`N` analog of Phases B–C, connecting the

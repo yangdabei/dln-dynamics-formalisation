@@ -20,6 +20,8 @@ The compiled paper is included as [`saxe-2014.pdf`](saxe-2014.pdf).
 | Conservation | `a² − b²` is a constant of motion | §1.3 | `ab_conserved`, `ab_conserved_eq` |
 | Closed form | `u_f(t) = s·e^{2st/τ} / (e^{2st/τ} − 1 + s/u₀)` | Eq. `u_soln` | `uf` |
 | Reduced ODE | `u_f` solves `τ u' = 2u(s − u)`, with `u_f(0) = u₀` | Eq. `sigmoidal_dyn` | `uf_hasDerivAt`, `uf_zero` |
+| Asymptotics | `u_f(t) → s` as `t → ∞` (sigmoid reaches the fixed point) | §"time course" | `uf_tendsto_atTop` |
+| Learning time | `∫_{u₀}^{u_f} du/(2u(s−u)) = (1/2s) ln(u_f(s−u₀)/(u₀(s−u_f)))` | Eq. `u_int` | `learningTime_integral` |
 
 (All on the paper's regime `0 < u₀ < s`, `0 < τ`.)
 
@@ -70,12 +72,10 @@ per-layer diagonal-in-frame form is taken as a hypothesis (the depth-`N` analog 
 `InvariantManifold` takes manifold membership as a hypothesis); its forward-invariance
 in time is deferred.
 
-**Deferred** (future work): symmetric-manifold forward-invariance in time
-(above); the infinite-depth limit `τ u' = N_l u²(s − u)`
-(Eq. `inf_dyn`) and its learning time (Eq. `inf_tc`); the `t → ∞` limit
-`u_f → s` and the separable learning-time integral `t(u)` (Eq. `u_int`); the
-unbalanced/hyperbolic `a ≠ b` dynamics (Appendix A); and the rectangular-diagonal
-`Σ³¹` generalization (see `PROGRESS.md`).
+**Deferred** (future work): the infinite-depth limit `τ u' = N_l u²(s − u)`
+(Eq. `inf_dyn`) and its learning time (Eq. `inf_tc`); symmetric-manifold
+forward-invariance in time (above); the unbalanced/hyperbolic `a ≠ b` dynamics
+(Appendix A); and the rectangular-diagonal `Σ³¹` generalization (see `PROGRESS.md`).
 
 ## Build
 
@@ -109,6 +109,7 @@ DlnDynamics/SVDExistence.lean  exists_isSVD, exists_mode_dynamics_of_gradFlow (L
 DlnDynamics/DeepDynamics.lean  IsDeepFlow, deepFlow_conserved, deep_dyn   (depth-N law, Eq. deep_dyn)
 DlnDynamics/DeepMatrixFlow.lean prodDesc, prodDesc_telescope, multilayerFlow_of_gradFlow (depth-N Phase A, Eq. multilayer_dyn)
 DlnDynamics/DeepReduction.lean above/belowProd_factored, isDeepFlow_of_gradFlow, deep_dyn_of_gradFlow (depth-N Phases B-C)
+DlnDynamics/TimeEquation.lean  uf_tendsto_atTop, learningTime_integral   (learning timescale, Eq. u_int)
 scripts/no_sorry.sh            sorry / axiom gate (also run in CI)
 scripts/check_closed_form.py   numerical sanity check (ODE closed form)
 scripts/check_svd_reduction.py numerical sanity check (change of vars + a_dyn)

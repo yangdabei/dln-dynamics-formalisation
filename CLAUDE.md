@@ -46,16 +46,20 @@ correlation matrix). Modules:
   `deep_dyn_of_gradFlow` (`N_l`-layer gradient descent ⇒ `deep_dyn` on the symmetric
   submanifold). **The depth-`N` matrix reduction is complete** (equal-square layers,
   diagonality-in-frame as a hypothesis).
+- `TimeEquation.lean` (learning timescale) — the `t → ∞` asymptotics `uf_tendsto_atTop`
+  (`u_f → s`, via `uf = s/(1 + (s/u₀−1)e^{−2st/τ})` and `e^{−…} → 0`) and the separable
+  learning-time integral `learningTime_integral` (Eq. `u_int`, FTC on the antiderivative
+  `(1/2s)(ln u − ln(s−u))`).
 
 **Next steps (agreed direction):**
-1. **Time equation** — the `t → ∞` limit `uf → s` and the learning-time integral
-   `t(u)`/`u_int` (Eq. `u_int`) (`ClosedForm` currently verifies the *solution*, not the
-   integration or the asymptotics). The more self-contained milestone.
-2. **Infinite-depth limit** — `τ u' = N_l u²(s − u)` (Eq. `inf_dyn`) and its learning
-   time `t(u)` (Eq. `inf_tc`), the `N_l → ∞` companion of `deep_dyn`.
-3. **Symmetric-manifold forward-invariance in time** — the depth-`N` analog of
+1. **Infinite-depth limit** — `τ u' = N_l u²(s − u)` (Eq. `inf_dyn`) and its learning
+   time `t(u)` (Eq. `inf_tc`), the `N_l → ∞` companion of `deep_dyn` (a closed-form integral
+   like `learningTime_integral`, plus the exponent-limit framing).
+2. **Symmetric-manifold forward-invariance in time** — the depth-`N` analog of
    `ManifoldInvariance` (ODE uniqueness), discharging the diagonality-in-frame hypothesis
    of `DeepReduction`.
+3. **Unbalanced / hyperbolic dynamics** (`a ≠ b`, Appendix A) and **rectangular `Σ³¹`** —
+   long-deferred generalizations; add as real theorems when the time comes.
 
 Also deferred: unbalanced / hyperbolic dynamics (Appendix A, `a ≠ b`; the manifold theorem
 already takes scalar solutions as a hypothesis) and rectangular `Σ³¹`. Do not stub any of
@@ -191,6 +195,10 @@ After completing each proof, reflect on what worked and what didn't. If there's 
 **Collapse a frame-conjugated matrix velocity to a diagonal by cancelling all four orthogonal pairs at once.** `flowval_conj`: after substituting the factored `above/below/prodDesc`, `simp only [Matrix.transpose_mul, Matrix.transpose_transpose, Matrix.diagonal_transpose]`, fold `S − ∏` with `← Matrix.diagonal_sub` (it is `diag−diag = diag(−)`, so use `←`; keep the arg as `fun i => σ i − …`, NOT `Pi.sub`, or the pattern won't match) + `mul_sub` + `sub_mul`, then `simp only [Matrix.mul_assoc]` and cancel left-to-right: `rw [← Matrix.mul_assoc Xᵀ X, hR X, Matrix.one_mul]` per interior pair — but the LAST (innermost) pair is already adjacent (`diag * (Xᵀ * X)`), so close it with `hR X, Matrix.mul_one` (no `← mul_assoc`). Two `diagonal_mul_diagonal` merge the three diagonals; `congr 1; funext; ring`.
 
 **Extract a scalar entry's derivative from a matrix `HasDerivAt` through constant conjugating factors.** `hasDerivAt_conj_apply h A B p q : HasDerivAt (fun s => (A · M s · B) p q) ((A·M'·B) p q) t` from `h : HasDerivAt M M' t`: expand the entry as `∑ y ∑ x A p x · (M s) x y · B y q` (`hexp`, `mul_apply` + `sum_mul`), then `HasDerivAt.sum (… HasDerivAt.sum (… (proj.const_mul (A p x)).mul_const (B y q)))` where `proj = hasDerivAt_pi.1 (hasDerivAt_pi.1 h x) y`. `HasDerivAt.sum` yields a *sum-of-functions* (`∑ y ∑ x fun s => …`), defeq-blocked from the goal's *function-of-sum*; bridge with an explicit `have hfeq : (fun s => ∑ y ∑ x body[s]) = (∑ y ∑ x fun s => body) := by funext s; simp only [Finset.sum_apply]` then `rw [hfeq]; exact …`.
+
+**Prove a `t → ∞` limit of a rational-exponential by rewriting with a *decaying* exponential, then composing `Tendsto`.** For `uf → s` (`uf_tendsto_atTop`): first `uf = s/(1 + (s/u₀−1)e^{−2st/τ})` (`uf_eq_div_one_add`; prove `1+(s/u₀−1)e^{−x} = denom·e^{−x}` by `Real.exp_neg`+`field_simp`+`ring`, then `field_simp`). Then `e^{−2st/τ} → 0` via `simp only [Real.exp_neg]; (Real.tendsto_exp_atTop.comp hslope).inv_tendsto_atTop` where `hslope : (fun t => 2st/τ) → atTop` is `(rw to (2s/τ)*t); Tendsto.const_mul_atTop (by positivity) tendsto_id`; denom `→ 1` by `(hexp0.const_mul _).const_add 1`; finish `tendsto_const_nhds.div hdenom one_ne_zero` (`s/1`), `rw [div_one]`, `.congr` the `uf` identity.
+
+**Evaluate a definite integral by the second FTC + an explicit antiderivative.** `learningTime_integral` (Eq. `u_int`): `intervalIntegral.integral_eq_sub_of_hasDerivAt hderiv hint : ∫ u in a..b, f' u = F b − F a`. `hderiv : ∀ x ∈ Set.uIcc a b, HasDerivAt F (f' x) x` — `rw [Set.uIcc_of_le hf] at hx` to get `Set.Icc`, build the log-derivative `(Real.hasDerivAt_log hsx.ne').comp x ((hasDerivAt_const x s).sub (hasDerivAt_id x))` for `log(s−u)`, combine `.sub`/`.const_mul`, and **retarget the value by `rw [show f' = <combinator value> from by field_simp; ring]; exact h3`** (NOT `convert`, which spawns instance/`fun`-eq subgoals through `HasDerivAt`). `hint` via `ContinuousOn.intervalIntegrable` + `ContinuousOn.div` (the denom-`≠0` goal isn't β-reduced — `show 2*x*(s−x) ≠ 0` then `positivity`). Finish by `simp only [hF]` (β-reduce `F b`, `F a`) and `Real.log_div`/`Real.log_mul` (all args `≠ 0` by `positivity`) + `ring`.
 
 ## Mathlib API Reference (build out as we go)
 
