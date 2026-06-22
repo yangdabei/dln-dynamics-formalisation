@@ -4,6 +4,38 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
+## Session 2026-06-22 — Depth-`N` MATRIX REDUCTION COMPLETE (Phases B–C: change of variables → IsDeepFlow)
+
+**Done.** `DlnDynamics/DeepReduction.lean` — the depth-`N` analog of Phases B–C, connecting the
+matrix flow `multilayer_dyn` to the scalar `IsDeepFlow`. **Milestone 1 (full depth-`N` matrix
+reduction) is complete** for equal-size square layers. Gap-free (`#print axioms` =
+`[propext, Classical.choice, Quot.sound]` on `isDeepFlow_of_gradFlow`, `deep_dyn_of_gradFlow`,
+`flowval_conj`), `lake build` clean, no `sorry`. The mode-decoupling identity numerically
+cross-checked (residual ~5e-12 over random orthogonal frames / depths).
+
+User chose "continue Phase B–C now". The chain: `IsDeepMatrixGradFlow` (gradient descent) →
+`multilayerFlow_of_gradFlow` (Eq. 244) → change of variables `Wₗ = R₍ₗ₊₁₎ diag(aₗ) Rₗᵀ` →
+per-mode `IsDeepFlow` → (symmetric submanifold) `deep_dyn`.
+
+- **`prodDesc_diagonal`** — `∏ diag(aᵢ) = diag(∏ aᵢ)` (induction + `prodDesc_succ`).
+- **Sub-range telescoping.** `belowProd_factored : ∏_{i<l} Wᵢ = Rₗ diag(∏_{i<l} aᵢ) R₀ᵀ` and
+  `aboveProd_factored : ∏_{i>l} Wᵢ = R_m diag(∏_{i>l} aᵢ) R₍ₗ₊₁₎ᵀ`. The take/drop prefix/suffix
+  products have no clean `ofFn`-reindexing, so proven via one-step recursions `belowProd_succ`
+  (`List.cons_getElem_drop_succ`) / `aboveProd_succ` (`List.prod_take_succ`) + `Fin.induction` /
+  `Fin.reverseInduction`; `Finset.Iio`/`Ioi` successor shifts handled per step.
+- **`flowval_conj`** — the mode decoupling: `(R₍ₗ₊₁₎)ᵀ · [aboveᵀ(Σ³¹−∏W)belowᵀ] · Rₗ` collapses
+  (4 orthogonal-pair cancellations + 3 diagonal merges) to `diag(α ↦ ∏_{i>l}·(σα−∏)·∏_{i<l})` —
+  the diagonal of scalar deep-flow velocities.
+- **`hasDerivAt_conj_apply`** — extracts a scalar entry's derivative from a matrix `HasDerivAt`
+  through constant conjugating factors (entrywise sum + `Finset.sum_apply` bridge).
+- **`isDeepFlow_of_gradFlow`** — assembles the above: each mode `α` of the factored gradient flow
+  obeys `IsDeepFlow (σ α) τ`. **`deep_dyn_of_gradFlow`** composes with `deep_dyn_of_deepFlow`:
+  `N_l`-layer gradient descent ⇒ `deep_dyn` on the symmetric submanifold, end to end.
+
+Diagonality-in-frame is a hypothesis (the depth-`N` analog of `InvariantManifold`'s manifold
+membership). **Next:** the time equation (`t→∞` limit + `u_int`), the infinite-depth limit
+(`inf_dyn`/`inf_tc`), and symmetric-manifold forward-invariance in time.
+
 ## Session 2026-06-22 — Depth-`N` Phase A DONE (matrix flow `multilayer_dyn` from gradient descent)
 
 **Done.** `DlnDynamics/DeepMatrixFlow.lean` — derives the `N_l`-layer matrix gradient flow

@@ -15,3 +15,4 @@ import DlnDynamics.ManifoldInvariance
 import DlnDynamics.SVDExistence
 import DlnDynamics.DeepDynamics
 import DlnDynamics.DeepMatrixFlow
+import DlnDynamics.DeepReduction

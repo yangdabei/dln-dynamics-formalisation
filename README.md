@@ -47,6 +47,9 @@ with `m = N_l − 1` weight matrices, each connectivity mode is `m` scalars
 | **Depth-`N` law** | `u = aᵐ` obeys `τ u' = (N_l−1) u^{2−2/(N_l−1)}(s − u)` | Eq. `deep_dyn` | `deep_dyn`, `deepSym_hasDerivAt` |
 | `N_l = 3` check | the depth-`N` law collapses to `τ u' = 2u(s − u)` | Eq. `sigmoidal_dyn` | `deepSym_hasDerivAt_two` |
 | Deep matrix flow | grad. descent on `½‖Σ³¹ − ∏W‖²` gives `τ Ẇₗ = (∏_{i>l}Wᵢ)ᵀ(Σ³¹−∏W)(∏_{i<l}Wᵢ)ᵀ` | Eq. `multilayer_dyn` | `multilayerFlow_of_gradFlow` |
+| Change of vars | `Wₗ = R₍ₗ₊₁₎ diag(aₗ) Rₗᵀ`, orthogonal `Rₗ`, `Σ³¹ = R_m diag(σ) R₀ᵀ`: products telescope | §"deeper" | `prodDesc_telescope`, `aboveProd_factored`, `belowProd_factored` |
+| Mode extraction | the matrix flow decouples — each mode `α` obeys the scalar `IsDeepFlow` with `s = σ_α` | §"deeper" | `isDeepFlow_of_gradFlow` |
+| End to end | `N_l`-layer grad. descent ⇒ (sym. submanifold) `u = cᵐ` obeys `deep_dyn` | Eqs. `multilayer_dyn`→`deep_dyn` | `deep_dyn_of_gradFlow` |
 
 **Scope/honesty.** The matrix flow `wb_avg`, the SVD change of variables `wbo_dyn`
 (given an SVD of `Σ³¹` *as a hypothesis*, `IsSVD`), and the per-mode `a_dyn`/`b_dyn`
@@ -58,15 +61,17 @@ law and closed form of Layers 1–2. The **forward-invariance in time** of the
 orthogonal-mode manifold is discharged via ODE uniqueness
 (`ManifoldInvariance.lean`), and **SVD existence** for any square `Σ³¹` is
 constructed (`SVDExistence.lean`, `exists_isSVD`), so the 3-layer chain is
-gap-free end to end. For the depth-`N` law, the scalar headline `deep_dyn`, the
-conservation law, and the matrix gradient flow `multilayer_dyn`
-(`DeepMatrixFlow.lean`, Phase A — derived from gradient descent on `½‖Σ³¹ − ∏W‖²`
-for equal-size square layers) are gap-free; the remaining Phases B–C (the layerwise
-`Rₗ` change of variables decoupling the modes via `prodDesc_telescope`, then mode
-extraction reducing the diagonal dynamics to the scalar `IsDeepFlow`) are in progress.
+gap-free end to end. The depth-`N` development is **complete** for equal-size square
+layers: the scalar `deep_dyn` + conservation (`DeepDynamics.lean`), the matrix gradient
+flow `multilayer_dyn` (`DeepMatrixFlow.lean`, Phase A), and the change of variables +
+mode extraction (`DeepReduction.lean`, Phases B–C) compose into `deep_dyn_of_gradFlow`:
+`N_l`-layer gradient descent ⇒ (on the symmetric submanifold) the depth-`N` law. The
+per-layer diagonal-in-frame form is taken as a hypothesis (the depth-`N` analog of how
+`InvariantManifold` takes manifold membership as a hypothesis); its forward-invariance
+in time is deferred.
 
-**Deferred** (future work): the depth-`N` Phases B–C and symmetric-manifold
-forward-invariance (above); the infinite-depth limit `τ u' = N_l u²(s − u)`
+**Deferred** (future work): symmetric-manifold forward-invariance in time
+(above); the infinite-depth limit `τ u' = N_l u²(s − u)`
 (Eq. `inf_dyn`) and its learning time (Eq. `inf_tc`); the `t → ∞` limit
 `u_f → s` and the separable learning-time integral `t(u)` (Eq. `u_int`); the
 unbalanced/hyperbolic `a ≠ b` dynamics (Appendix A); and the rectangular-diagonal
@@ -103,6 +108,7 @@ DlnDynamics/ManifoldInvariance.lean manifold_forward_invariant            (Layer
 DlnDynamics/SVDExistence.lean  exists_isSVD, exists_mode_dynamics_of_gradFlow (Layer 3, Phase E)
 DlnDynamics/DeepDynamics.lean  IsDeepFlow, deepFlow_conserved, deep_dyn   (depth-N law, Eq. deep_dyn)
 DlnDynamics/DeepMatrixFlow.lean prodDesc, prodDesc_telescope, multilayerFlow_of_gradFlow (depth-N Phase A, Eq. multilayer_dyn)
+DlnDynamics/DeepReduction.lean above/belowProd_factored, isDeepFlow_of_gradFlow, deep_dyn_of_gradFlow (depth-N Phases B-C)
 scripts/no_sorry.sh            sorry / axiom gate (also run in CI)
 scripts/check_closed_form.py   numerical sanity check (ODE closed form)
 scripts/check_svd_reduction.py numerical sanity check (change of vars + a_dyn)

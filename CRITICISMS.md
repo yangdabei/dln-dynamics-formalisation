@@ -36,11 +36,12 @@ items below are kept verbatim as the review, with status noted here.
   **Medium 1 (integration argument in `ClosedForm`)** — unchanged, an honest accepted gap.
 
 Remaining: the optional rectangular-diagonal `S` generalization (non-square `Σ³¹`),
-general *unbalanced* manifold init, the `t→∞` limit / learning-time integral, and the
-depth-`N` Phases B–C (change of variables + mode extraction) + infinite-depth limit.
+general *unbalanced* manifold init, the `t→∞` limit / learning-time integral, the
+infinite-depth limit (`inf_dyn`/`inf_tc`), and symmetric-manifold forward-invariance in time.
 (Phase E SVD existence — done for any square `Sg`; Phase D option 3 forward-invariance —
-done; depth-`N` scalar law `deep_dyn` — done, `DeepDynamics.lean`; depth-`N` matrix flow
-`multilayer_dyn` Phase A — done, `DeepMatrixFlow.lean`.)
+done; depth-`N` scalar law `deep_dyn` — done, `DeepDynamics.lean`; **depth-`N` matrix reduction
+end-to-end — done**: `multilayer_dyn` Phase A `DeepMatrixFlow.lean`, change of variables + mode
+extraction Phases B–C `DeepReduction.lean` (`deep_dyn_of_gradFlow`), equal-square layers.)
 
 ## Critical
 

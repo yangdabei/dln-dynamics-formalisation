@@ -37,19 +37,25 @@ correlation matrix). Modules:
   commute) + product split `prodDesc_update`/`prodDesc_split`, the unified bilinear
   entry-derivative `hasDerivAt_loss_layer` (`∂/∂X ½‖S−AXB‖² = −Aᵀ(S−AXB)Bᵀ`),
   `IsDeepMatrixGradFlow` ⇒ `multilayerFlow_of_gradFlow`. Also `prodDesc_telescope` (the
-  `Rₗ` change-of-variables cancellation, proven, ready for Phase B).
+  `Rₗ` change-of-variables cancellation).
+- `DeepReduction.lean` (depth-`N` Phases B–C) — the change of variables + mode extraction.
+  Sub-range telescoping `aboveProd_factored`/`belowProd_factored` (prefix/suffix products
+  ⇒ `R_m diag R₍ₗ₊₁₎ᵀ`, `Rₗ diag R₀ᵀ`); the mode-decoupling cancellation `flowval_conj`
+  (conjugating the matrix velocity by the frames ⇒ diagonal of scalar deep-flow velocities);
+  `isDeepFlow_of_gradFlow` (each mode obeys `IsDeepFlow`) and the end-to-end
+  `deep_dyn_of_gradFlow` (`N_l`-layer gradient descent ⇒ `deep_dyn` on the symmetric
+  submanifold). **The depth-`N` matrix reduction is complete** (equal-square layers,
+  diagonality-in-frame as a hypothesis).
 
 **Next steps (agreed direction):**
-1. **Depth-`N` matrix reduction** — the scalar `deep_dyn` (`DeepDynamics`) and the matrix
-   flow `multilayer_dyn` (`DeepMatrixFlow`, Phase A) are DONE. What remains is **Phase B–C**:
-   the layerwise `Rₗ` change of variables `Wₗ = R₍ₗ₊₁₎ W̄ₗ Rₗᵀ` (using `prodDesc_telescope`)
-   decoupling the modes, then mode extraction reducing the diagonal `W̄` dynamics to the
-   scalar `IsDeepFlow` (taking per-layer diagonality-in-SVD-frame as a hypothesis, the
-   depth-`N` analog of `InvariantManifold`). Then the **infinite-depth** limit
-   `τ u' = N_l u²(s − u)` (Eq. `inf_dyn`) and its learning time (Eq. `inf_tc`).
-2. **Time equation** — the `t → ∞` limit `uf → s` and the learning-time integral
-   `t(u)`/`u_int` (`ClosedForm` currently verifies the *solution*, not the integration
-   or the asymptotics).
+1. **Time equation** — the `t → ∞` limit `uf → s` and the learning-time integral
+   `t(u)`/`u_int` (Eq. `u_int`) (`ClosedForm` currently verifies the *solution*, not the
+   integration or the asymptotics). The more self-contained milestone.
+2. **Infinite-depth limit** — `τ u' = N_l u²(s − u)` (Eq. `inf_dyn`) and its learning
+   time `t(u)` (Eq. `inf_tc`), the `N_l → ∞` companion of `deep_dyn`.
+3. **Symmetric-manifold forward-invariance in time** — the depth-`N` analog of
+   `ManifoldInvariance` (ODE uniqueness), discharging the diagonality-in-frame hypothesis
+   of `DeepReduction`.
 
 Also deferred: unbalanced / hyperbolic dynamics (Appendix A, `a ≠ b`; the manifold theorem
 already takes scalar solutions as a hypothesis) and rectangular `Σ³¹`. Do not stub any of
@@ -177,6 +183,14 @@ After completing each proof, reflect on what worked and what didn't. If there's 
 **One bilinear entry-derivative subsumes every layer's loss partial.** `∂/∂X ½‖S − A X B‖² = −Aᵀ(S − A X B)Bᵀ` (`hasDerivAt_loss_layer`): with `A = aboveProd`, `B = belowProd` it is *every* layer's partial of the deep loss (and `A=Wᵇ,B=I` / `A=I,B=Wᵃ` recover the two 3-layer `MatrixFlow` partials). The sandwich selector `(A · single k j 1 · B) p q = A p k · B j q` (`single_sandwich_apply`, two `mul_apply` + `sum_eq_single`) reduces it to the Layer-1 squared-affine technique; the Frobenius assembly `(Aᵀ M Bᵀ)ₖⱼ = ∑ₚ∑_q Aₚₖ Mₚ_q B_jq` needs a `Finset.sum_comm` (expand the inner `mul_apply` with `Finset.sum_mul`, then swap).
 
 **Bridge a `deriv (fun x => …)` whose function is β-defeq but not syntactically equal with a `have hd : deriv <clean form> = … := (lemma).deriv`.** The gradient-flow structure stores `deriv (fun x => Edeep S (update (fun i => W i t) l (W l t + x•single))) 0`, but `hasDerivAt_Edeep_layer S (fun i => W i t) …` produces the same with `(fun i => W i t) l` in place of `W l t`. State `hd` in the *structure's* form and close it by `exact (lemma).deriv` — defeq accepts the β-difference — then `rw [hd] at hflow` matches syntactically. (Same `hasDerivAt_pi.2`-bundle + `Matrix.smul_apply` + `show (1/τ)*M k l = -(-(M k l))/τ by ring` closer as the 3-layer `matrixFlow_of_gradFlow`.)
+
+**Telescope a *sub-range* (prefix/suffix) ordered product by its `succ`-recursion, not by reindexing.** `prodDesc_telescope` handles the full product, but `aboveProd`/`belowProd` (= `take`/`drop` of the reversed list) have no clean `ofFn`-reindexing (the `List.drop_reverse`/`take_ofFn` lemmas don't exist). Instead prove the one-step recursions — `belowProd W i.succ = W i.castSucc * belowProd W i.castSucc` (via `List.cons_getElem_drop_succ` + `List.getElem_reverse`/`getElem_ofFn` + `omega` on the reflected index) and `aboveProd W i.castSucc = aboveProd W i.succ * W i.succ` (via `List.prod_take_succ`) — then telescope by `induction l using Fin.induction` (below, bottom-up) / `Fin.reverseInduction` (above, top-down). Both need `obtain ⟨k, rfl⟩ : ∃ k, m = k+1 := ⟨m-1, by have := l.isLt; omega⟩` first (`Fin.induction` wants `Fin (k+1)`). The per-step `Finset.Iio`/`Ioi` shift is `Iio i.succ = insert i.castSucc (Iio i.castSucc)` (prove by `ext; simp [Fin.lt_def, Fin.ext_iff, Fin.val_succ, Fin.val_castSucc]; omega`).
+
+**Don't `rw [Finset.prod_insert]` under a `fun α => …` binder — lift it into a `diagonal`-level `have`.** To rewrite `diagonal (fun α => ∏ j ∈ insert i s, f j α)`, prove `hdiag : diagonal (∏ over insert) = diagonal (f i) * diagonal (∏ over s)` by `rw [Matrix.diagonal_mul_diagonal]; congr 1; funext α; rw [Iio_succ_eq, Finset.prod_insert (by simp)]` (and `mul_comm` for the suffix order), then `rw [hdiag]`. The orthogonal cancellation that follows is the standard `simp only [Matrix.mul_assoc]; rw [← Matrix.mul_assoc Cᵀ C, hC, Matrix.one_mul]`.
+
+**Collapse a frame-conjugated matrix velocity to a diagonal by cancelling all four orthogonal pairs at once.** `flowval_conj`: after substituting the factored `above/below/prodDesc`, `simp only [Matrix.transpose_mul, Matrix.transpose_transpose, Matrix.diagonal_transpose]`, fold `S − ∏` with `← Matrix.diagonal_sub` (it is `diag−diag = diag(−)`, so use `←`; keep the arg as `fun i => σ i − …`, NOT `Pi.sub`, or the pattern won't match) + `mul_sub` + `sub_mul`, then `simp only [Matrix.mul_assoc]` and cancel left-to-right: `rw [← Matrix.mul_assoc Xᵀ X, hR X, Matrix.one_mul]` per interior pair — but the LAST (innermost) pair is already adjacent (`diag * (Xᵀ * X)`), so close it with `hR X, Matrix.mul_one` (no `← mul_assoc`). Two `diagonal_mul_diagonal` merge the three diagonals; `congr 1; funext; ring`.
+
+**Extract a scalar entry's derivative from a matrix `HasDerivAt` through constant conjugating factors.** `hasDerivAt_conj_apply h A B p q : HasDerivAt (fun s => (A · M s · B) p q) ((A·M'·B) p q) t` from `h : HasDerivAt M M' t`: expand the entry as `∑ y ∑ x A p x · (M s) x y · B y q` (`hexp`, `mul_apply` + `sum_mul`), then `HasDerivAt.sum (… HasDerivAt.sum (… (proj.const_mul (A p x)).mul_const (B y q)))` where `proj = hasDerivAt_pi.1 (hasDerivAt_pi.1 h x) y`. `HasDerivAt.sum` yields a *sum-of-functions* (`∑ y ∑ x fun s => …`), defeq-blocked from the goal's *function-of-sum*; bridge with an explicit `have hfeq : (fun s => ∑ y ∑ x body[s]) = (∑ y ∑ x fun s => body) := by funext s; simp only [Finset.sum_apply]` then `rw [hfeq]; exact …`.
 
 ## Mathlib API Reference (build out as we go)
 
