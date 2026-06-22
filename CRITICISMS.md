@@ -5,7 +5,7 @@ Lean formalization. These are not style nits; they are the issues most likely to
 affect whether the project remains mathematically honest, readable, and able to
 reach the full matrix-to-mode reduction.
 
-## Resolution status (updated 2026-06-21)
+## Resolution status (updated 2026-06-22)
 
 Most of the original criticisms have been addressed across the Phase B/C/D work; the
 items below are kept verbatim as the review, with status noted here.
@@ -16,7 +16,9 @@ items below are kept verbatim as the review, with status noted here.
   `isABFlow_of_gradFlow_on_manifold`); docs state explicitly which links are established
   and that the one remaining gap is forward-invariance in time.
 - **Critical 2 (Phase B before SVD existence)** — done: `SVDReduction.lean`, SVD carried
-  as the `IsSVD` hypothesis; SVD existence (Phase E) deferred.
+  as the `IsSVD` hypothesis; SVD *existence* (Phase E) now **discharged for the square
+  full-rank case** (`SVDExistence.lean`, `exists_isSVD_of_isUnit`). Rank-deficient general
+  case deferred.
 - **Critical 3 / Recommended 6 (invariant manifold as a real theorem)** — option 1 done
   (`isABFlow_of_modeFlow`, with explicit manifold hypotheses, not hidden in the
   extraction); forward-invariance in time (option 3) is scoped as its own theorem in
@@ -25,14 +27,17 @@ items below are kept verbatim as the review, with status noted here.
   (`trace_transpose_mul_self`, `sum_sq_mul_orthogonal`, named trace steps).
   **High 4 (mode indexing)** — done (`aMode`/`bMode`, explicit `∑_{γ≠α}` competition).
 - **High 2 (SVD interface) / Recommended 7** — the `IsSVD` interface is designed and used;
-  the SVD *existence* build (Phase E) is the main remaining deferred item.
+  the SVD *existence* build (Phase E) is **done for square full-rank `Sg`** (`SVDExistence.lean`),
+  composed end-to-end in `exists_mode_dynamics_of_gradFlow_of_isUnit` (gradient descent on an
+  invertible `Sg` ⇒ `a_dyn`/`b_dyn`, no SVD assumed). Only the rank-deficient case remains.
 - **Medium 2 (lemma structure over comments)** — addressed; large rewrites factored into
   named lemmas mirroring the paper, now a standing rule in `CLAUDE.md`.
   **Medium 3 (conceptual chain over endpoint equations)** — addressed (composable chain).
   **Medium 1 (integration argument in `ClosedForm`)** — unchanged, an honest accepted gap.
 
-Remaining: Phase D option 3 (forward-invariance, in a parallel session), Phase E (SVD
-existence), and the optional rectangular-diagonal `S` generalization.
+Remaining: Phase E **rank-deficient (general) case** (full-rank done), the optional
+rectangular-diagonal `S` generalization, general *unbalanced* manifold init, and the
+`t→∞` limit. (Phase D option 3 forward-invariance — done.)
 
 ## Critical
 

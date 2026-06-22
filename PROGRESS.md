@@ -4,6 +4,42 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
+## Session 2026-06-22 — Phase E DONE (SVD existence, square full-rank case)
+
+**Done.** `DlnDynamics/SVDExistence.lean` — *constructs* a singular value decomposition,
+discharging the `IsSVD` hypothesis that Phase B carried. Full chain gap-free (`#print axioms`
+= `[propext, Classical.choice, Quot.sound]`), `lake build` clean, no `sorry`.
+
+**Scope: square, full-rank** (user-confirmed). `exists_isSVD_of_isUnit`: every *invertible*
+square real `Sg` admits `Sg = U (diagonal σ) Vᵀ` with `U`,`V` orthogonal. Full rank is exactly
+what lets the left factor be written explicitly — `U := Sg V (diagonal σ)⁻¹`, no orthonormal
+completion (the basis-extension sink) needed. This is the square shape every consumer uses
+(`ModeDynamics`, `ManifoldInvariance` all fix `U V : Matrix (Fin N)(Fin N) ℝ`, `S = diagonal σ`).
+
+The construction (each step a named lemma, mirroring the standard proof + the numeric check):
+- **Gram PD** (`posSemidef_transpose_mul_self`, `posDef_transpose_mul_self_of_isUnit`): `Sgᵀ Sg`
+  is Hermitian PSD (`posSemidef_conjTranspose_mul_self` + `conjTranspose = transpose` over ℝ),
+  and PD since `det(Sgᵀ Sg)=(det Sg)²≠0` via `PosSemidef.posDef_iff_det_ne_zero`.
+- **Real spectral adapter** (`real_spectral`, `eigenvectorMatrix_orthogonal`): unfold Mathlib's
+  `spectral_theorem` (`conjStarAlgAut`/`unitaryGroup`/`RCLike.ofReal` form) to plain
+  `Sgᵀ Sg = V (diagonal d) Vᵀ` with `Vᵀ V = 1` (`Unitary.conjStarAlgAut_apply`,
+  `Unitary.coe_star_mul_self`, `star = ᵀ` over ℝ); eigenvalues `d i>0` from `PosDef.eigenvalues_pos`.
+- **Assemble** (`isSVD_of_spectral`): `σ i=√(d i)`, `U=Sg V (diagonal σ)⁻¹` (pointwise-inverse
+  diagonal). `Uᵀ U = σ⁻¹ (Vᵀ V) D (Vᵀ V) σ⁻¹ = σ⁻¹ D σ⁻¹ = 1` and `U (diagonal σ) Vᵀ = Sg V Vᵀ = Sg`
+  are **pure matrix-cancellation algebra** (the `SVDReduction.lean` regroup-and-cancel style).
+- **End-to-end discharge** (`exists_mode_dynamics_of_gradFlow_of_isUnit`): compose with
+  `a_dyn_of_gradFlow`/`b_dyn_of_gradFlow` (`hdiag := rfl`) ⇒ network gradient descent on an
+  invertible `Sg` obeys `a_dyn`/`b_dyn` in *some* SVD frame, **with no SVD assumed**.
+
+Numerics: `scripts/check_svd_existence.py` (stdlib + Jacobi eigensolver): `U diag(σ) Vᵀ = Sg`
+to 5e-15, `VᵀV=1` to 2e-15, `UᵀU=1` to 1e-11, min singular value >0 (full rank confirmed).
+
+**Deferred / next.** Phase E **general (rank-deficient) case** — zero singular values need an
+orthonormal completion of `U` via `Orthonormal.exists_orthonormalBasis_extension` (with
+`Fin N ↔ {σ>0} ↔ complement` reindexing and a `Matrix ↔ EuclideanSpace` bridge); separate
+HIGH-risk milestone, not attempted. Also still open: general *unbalanced* manifold init
+(Picard–Lindelöf), the `t→∞` limit `uf→s`, and the optional rectangular-diagonal `S`.
+
 ## Session 2026-06-22 — Phase D option 3 DONE (forward-invariance via ODE uniqueness)
 
 **Done.** `DlnDynamics/ManifoldInvariance.lean` — forward-invariance *in time* of the
