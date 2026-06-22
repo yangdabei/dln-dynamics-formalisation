@@ -4,6 +4,38 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
+## Session 2026-06-22 — Depth-`N` Phase A DONE (matrix flow `multilayer_dyn` from gradient descent)
+
+**Done.** `DlnDynamics/DeepMatrixFlow.lean` — derives the `N_l`-layer matrix gradient flow
+(Saxe Eq. `multilayer_dyn`) from per-entry gradient descent on `E = ½‖Σ³¹ − ∏W‖²` (equal-size
+square `n×n` layers, `m = N_l − 1` weight matrices). Gap-free (`#print axioms` =
+`[propext, Classical.choice, Quot.sound]` on `multilayerFlow_of_gradFlow`, `prodDesc_telescope`),
+`lake build` clean, no `sorry`. Matrix gradient numerically cross-checked against finite
+differences (residual ~2e-7).
+
+The user chose "derive Eq. 244 first" (over positing it / over the reduction first), equal-square
+layers, diagonality-as-hypothesis. The heaviest, most index-intensive part; built bottleneck-first:
+
+- **Ordered product.** Matrices don't commute ⇒ `prodDesc W := (List.ofFn W).reverse.prod`
+  (descending `W_{m-1}⋯W₀`), NOT `Finset.prod`. `prodDesc_succ` peels the top factor.
+- **Telescoping (Phase B core, proven ahead).** `prodDesc_telescope`:
+  `∏(R₍ᵢ₊₁₎ W̄ᵢ Rᵢᵀ) = R_m (∏W̄ᵢ) R₀ᵀ` — the `Rₗ` change of variables cancels every interior
+  orthogonal `R`. Induction on `m` (auto-generalizes the `m`-dependent `R, Wb`); the only
+  non-trivial step per layer is `Cᵀ C = 1` regroup-and-cancel.
+- **Product split (Phase A crux).** `prodDesc_update : prodDesc (update W l V) = aboveProd · V ·
+  belowProd` via `List.ofFn (update …) = (ofFn W).set ↑l V`, `reverse_set`, `List.prod_set` (all
+  by `List.ext_getElem` + `omega`). Makes the loss affine in one layer's perturbation.
+- **Unified bilinear derivative.** `hasDerivAt_loss_layer`: `∂/∂X ½‖S − A X B‖² = −Aᵀ(S−AXB)Bᵀ`,
+  one lemma covering every layer's partial (and both 3-layer `MatrixFlow` partials). Selector
+  `(A·single k j 1·B)ₚ_q = Aₚₖ B_jq` reduces it to the Layer-1 squared-affine technique; Frobenius
+  assembly via `Finset.sum_comm`.
+- **Assembly.** `IsDeepMatrixGradFlow` (per-entry grad descent) ⇒ `multilayerFlow_of_gradFlow`
+  `τ Ẇₗ = aboveProdᵀ (Σ³¹ − ∏W) belowProdᵀ` (Eq. `multilayer_dyn`, `Σ¹¹ = I`).
+
+**Remaining for milestone 1:** Phase B (the `Rₗ` change of variables → decoupled diagonal flow,
+using `prodDesc_telescope`) + Phase C (mode extraction `Wₗ = R₍ₗ₊₁₎ diag(aₗ) Rₗᵀ` ⇒ scalar
+`IsDeepFlow`, diagonality-as-hypothesis); then `inf_dyn`/`inf_tc`. See CLAUDE.md "Next steps".
+
 ## Session 2026-06-22 — Depth-`N` law DONE (scalar headline, Saxe Eq. `deep_dyn`)
 
 **Done.** `DlnDynamics/DeepDynamics.lean` — the depth-`N` generalization of the reduced mode

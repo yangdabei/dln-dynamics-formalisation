@@ -31,15 +31,22 @@ correlation matrix). Modules:
   `aᵢ² − aⱼ²` (`deepFlow_conserved`), symmetric reduction (`isDeepSymFlow_of_symmetric`), and
   `u = aᵐ` obeying `τ u' = (N_l−1) u^{2−2/(N_l−1)}(s − u)` (`deep_dyn`), recovering
   `sigmoidal_dyn` at `m = 2` (`deepSym_hasDerivAt_two`).
+- `DeepMatrixFlow.lean` (depth-`N` Phase A) — derives the `N_l`-layer matrix gradient flow
+  `multilayer_dyn` (Eq. `multilayer_dyn`) from gradient descent on `E = ½‖Σ³¹ − ∏W‖²`
+  (equal-size square layers): ordered product `prodDesc` (a `List.prod`, matrices don't
+  commute) + product split `prodDesc_update`/`prodDesc_split`, the unified bilinear
+  entry-derivative `hasDerivAt_loss_layer` (`∂/∂X ½‖S−AXB‖² = −Aᵀ(S−AXB)Bᵀ`),
+  `IsDeepMatrixGradFlow` ⇒ `multilayerFlow_of_gradFlow`. Also `prodDesc_telescope` (the
+  `Rₗ` change-of-variables cancellation, proven, ready for Phase B).
 
 **Next steps (agreed direction):**
-1. **Depth-`N` matrix reduction** — the scalar headline `deep_dyn` is DONE
-   (`DeepDynamics.lean`). What remains is the depth-`N` analog of Phases A–C: derive
-   `IsDeepFlow` from the `N_l`-layer matrix gradient descent `multilayer_dyn`
-   (Eq. `multilayer_dyn`) via the layerwise `Rₗ` change of variables, plus
-   forward-invariance of the symmetric submanifold (the depth-`N` analog of
-   `ManifoldInvariance`). Also the **infinite-depth** limit `τ u' = N_l u²(s − u)`
-   (Eq. `inf_dyn`) and its learning time (Eq. `inf_tc`).
+1. **Depth-`N` matrix reduction** — the scalar `deep_dyn` (`DeepDynamics`) and the matrix
+   flow `multilayer_dyn` (`DeepMatrixFlow`, Phase A) are DONE. What remains is **Phase B–C**:
+   the layerwise `Rₗ` change of variables `Wₗ = R₍ₗ₊₁₎ W̄ₗ Rₗᵀ` (using `prodDesc_telescope`)
+   decoupling the modes, then mode extraction reducing the diagonal `W̄` dynamics to the
+   scalar `IsDeepFlow` (taking per-layer diagonality-in-SVD-frame as a hypothesis, the
+   depth-`N` analog of `InvariantManifold`). Then the **infinite-depth** limit
+   `τ u' = N_l u²(s − u)` (Eq. `inf_dyn`) and its learning time (Eq. `inf_tc`).
 2. **Time equation** — the `t → ∞` limit `uf → s` and the learning-time integral
    `t(u)`/`u_int` (`ClosedForm` currently verifies the *solution*, not the integration
    or the asymptotics).
@@ -162,6 +169,14 @@ After completing each proof, reflect on what worked and what didn't. If there's 
 **Couple two matrix flows into one product-space ODE with `HasDerivAt.prodMk`, and let the field `def` close the gap by defeq.** `(hWba s).prodMk (hWbb s) : HasDerivAt (fun s => (Wba s, Wbb s)) (deriv₁, deriv₂) s`; feed it where `eq_of_autonomous_ode` expects `HasDerivAt f (flowField S τ (f s)) s` — `flowField` unfolds (`p.1 := Wba s`, `p.2 := Wbb s`) to exactly `(deriv₁, deriv₂)`, so the term typechecks without a rewrite. A matrix-valued field `def` that uses `1/τ` (real division) must be marked `noncomputable`. Split the final trajectory-equality `(Wba t, Wbb t) = (aLift…, bLift…)` into components with `simp only [Prod.mk.injEq] at heq` (the bare `.1`/`.2` projections do NOT reduce under `rw`).
 
 **Collapse an orthonormal-frame dot product with `smul_dotProduct` + `dotProduct_smul` + the orthonormality hypothesis.** `(c • r α) ⬝ᵥ (d • r β) = c • (d • (r α ⬝ᵥ r β))`; rewrite `r α ⬝ᵥ r β` by `horth α β : … = if α = β then 1 else 0`, then `if_pos rfl`/`if_neg h` and `smul_eq_mul`/`smul_zero`. Distinct modes give `0` (competition vanishes); the diagonal gives `c * d` (after `mul_one`). `ring` mops up the leftover `c • (d • 1)` ordering.
+
+**An ordered product of `N` *non-commuting* matrices is a `List.prod`, never a `Finset.prod`** (no `CommMonoid`). Use `prodDesc W := (List.ofFn W).reverse.prod` (descending `W_{m-1}⋯W₀`, the convention that telescopes with the paper's `Wₗ = R₍ₗ₊₁₎ W̄ₗ Rₗᵀ` change of variables). Peel the top factor with `prodDesc_succ` via `simp only [List.ofFn_succ', List.concat_eq_append, List.reverse_concat', List.prod_cons]` (`ofFn_succ'` emits a `.concat`, so `concat_eq_append` then `reverse_concat'`). Induct on `m` for telescoping: `induction m` AUTO-generalizes `R, Wb` (their types `Fin (m+1) → …` depend on `m`) — a bare `generalizing R Wb` is rejected as redundant; the IH lands fully `∀`-quantified. Reindex the IH with `R ∘ castSucc`, bridge `i.castSucc.succ ↔ i.succ.castSucc` by `Fin.castSucc_succ`, caps by `Fin.succ_last`/`Fin.castSucc_zero'`, then the regroup-and-cancel `simp only [Matrix.mul_assoc]; rw [← Matrix.mul_assoc Cᵀ C _, hCC (Cᵀ*C=1), Matrix.one_mul]`.
+
+**Split an ordered product at one factor with `List.prod_set`.** `prodDesc (Function.update W l V) = aboveProd · V · belowProd` (the crux of depth-`N` Phase A — makes the loss affine in one layer's perturbation) follows from: `List.ofFn (Function.update W l V) = (List.ofFn W).set ↑l V` (prove by `List.ext_getElem`; entries via `getElem_ofFn`/`getElem_set`/`Function.update_apply`/`Fin.ext_iff`, the two `if`-conditions differ by `eq_comm` so `by_cases hil; · simp [hil]; · simp [hil, Ne.symm hil]`); `reverse_set : (L.set i a).reverse = L.reverse.set (L.length-1-i) a` (also `ext_getElem`, but `rw [List.length_set]` fails a dependent motive inside the `getElem` proof — use `simp only [List.getElem_reverse, List.getElem_set, List.length_set]` instead, then `by_cases` + `omega` on the reflected index); then `List.prod_set` (guarded `if n < length`, discharge with `omega` and `l.isLt`).
+
+**One bilinear entry-derivative subsumes every layer's loss partial.** `∂/∂X ½‖S − A X B‖² = −Aᵀ(S − A X B)Bᵀ` (`hasDerivAt_loss_layer`): with `A = aboveProd`, `B = belowProd` it is *every* layer's partial of the deep loss (and `A=Wᵇ,B=I` / `A=I,B=Wᵃ` recover the two 3-layer `MatrixFlow` partials). The sandwich selector `(A · single k j 1 · B) p q = A p k · B j q` (`single_sandwich_apply`, two `mul_apply` + `sum_eq_single`) reduces it to the Layer-1 squared-affine technique; the Frobenius assembly `(Aᵀ M Bᵀ)ₖⱼ = ∑ₚ∑_q Aₚₖ Mₚ_q B_jq` needs a `Finset.sum_comm` (expand the inner `mul_apply` with `Finset.sum_mul`, then swap).
+
+**Bridge a `deriv (fun x => …)` whose function is β-defeq but not syntactically equal with a `have hd : deriv <clean form> = … := (lemma).deriv`.** The gradient-flow structure stores `deriv (fun x => Edeep S (update (fun i => W i t) l (W l t + x•single))) 0`, but `hasDerivAt_Edeep_layer S (fun i => W i t) …` produces the same with `(fun i => W i t) l` in place of `W l t`. State `hd` in the *structure's* form and close it by `exact (lemma).deriv` — defeq accepts the β-difference — then `rw [hd] at hflow` matches syntactically. (Same `hasDerivAt_pi.2`-bundle + `Matrix.smul_apply` + `show (1/τ)*M k l = -(-(M k l))/τ by ring` closer as the 3-layer `matrixFlow_of_gradFlow`.)
 
 ## Mathlib API Reference (build out as we go)
 

@@ -37,9 +37,10 @@ items below are kept verbatim as the review, with status noted here.
 
 Remaining: the optional rectangular-diagonal `S` generalization (non-square `Σ³¹`),
 general *unbalanced* manifold init, the `t→∞` limit / learning-time integral, and the
-depth-`N` *matrix* reduction + infinite-depth limit. (Phase E SVD existence — done for any
-square `Sg`; Phase D option 3 forward-invariance — done; depth-`N` scalar law `deep_dyn` —
-done, `DeepDynamics.lean`.)
+depth-`N` Phases B–C (change of variables + mode extraction) + infinite-depth limit.
+(Phase E SVD existence — done for any square `Sg`; Phase D option 3 forward-invariance —
+done; depth-`N` scalar law `deep_dyn` — done, `DeepDynamics.lean`; depth-`N` matrix flow
+`multilayer_dyn` Phase A — done, `DeepMatrixFlow.lean`.)
 
 ## Critical
 
