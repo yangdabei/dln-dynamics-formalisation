@@ -55,23 +55,26 @@ correlation matrix). Modules:
   (Eq. `inf_tc`, FTC on `(1/s²)(ln u − ln(s−u)) − 1/(su)`).
 - `UnbalancedDynamics.lean` (Appendix A, `a ≠ b`) — `u = ab` obeys `τ u' = (a²+b²)(s−u) =
   √(c₀²+4u²)(s−u)` (`hyperbolic_dyn`/`hyperbolic_dyn_sqrt`), the product-rule generalization of
-  `sigmoidal_dyn` (avoids the paper's typo'd θ-parametrization; `c₀=0` recovers `2u(s−u)`).
+  `sigmoidal_dyn` (avoids the paper's typo'd θ-parametrization; `c₀=0` recovers `2u(s−u)`). Also
+  the **unbalanced learning-time integral** `unbalancedLearningTime_integral` (Appendix A analogue
+  of `u_int`): `∫ du/(√(c₀²+4u²)(s−u)) = (1/√(c₀²+4s²))(arsinh z(u₀) − arsinh z(u_f))`,
+  `z(u)=(c₀²+4su)/(2|c₀|(u−s))`, via the FTC on `unbalancedAntideriv` (`arsinh` handles both signs
+  of `c₀` uniformly — see `hasDerivAt_unbalancedAntideriv`).
 - `DeepManifoldInvariance.lean` (depth-`N` forward-invariance) — `deep_manifold_invariant`:
   equal layer scalars at `t=0` stay equal (ODE uniqueness on the `IsDeepFlow` field `deepField`,
   reusing `eq_of_autonomous_ode`), giving the initial-condition-only `deep_dyn_of_deepFlow_init`.
 
-**The analytical core of Saxe (2014) is essentially complete.** Remaining (genuine
-generalizations, not yet started):
+**The analytical core of Saxe (2014) — including all of Appendix A — is complete.** The one
+remaining genuine generalization (not yet started):
 1. **Rectangular `Σ³¹`** — generalize the SVD reduction (`SVDReduction`/`ModeDynamics`/
    `SVDExistence`) and the depth-`N` reduction to non-square correlation matrices. Substantial.
-2. **Unbalanced learning-*time* integral** (Appendix A) — `∫ du/(√(c₀²+4u²)(s−u))`; the
-   `u`-*dynamics* is done (`UnbalancedDynamics`), only the messy hyperbolic integral remains.
 Out of scope (paper's analysis/experimental sections): optimal discrete-time learning rates,
 MNIST experiments, pretraining, generalization error, dynamical isometry, simulations.
 
-Also deferred: unbalanced / hyperbolic dynamics (Appendix A, `a ≠ b`; the manifold theorem
-already takes scalar solutions as a hypothesis) and rectangular `Σ³¹`. Do not stub any of
-these; add them as real theorems when the time comes.
+Appendix A (unbalanced `a ≠ b`) is now fully done: both the hyperbolic `u`-dynamics
+(`hyperbolic_dyn_sqrt`) and the learning-*time* integral (`unbalancedLearningTime_integral`)
+are real, gap-free theorems. Do not stub the rectangular generalization; add it as real
+theorems when the time comes.
 
 ## Conventions
 - Paper regime `0 < u₀ < s`, `0 < τ` carried explicitly as hypotheses.
@@ -208,6 +211,8 @@ After completing each proof, reflect on what worked and what didn't. If there's 
 
 **Evaluate a definite integral by the second FTC + an explicit antiderivative.** `learningTime_integral` (Eq. `u_int`): `intervalIntegral.integral_eq_sub_of_hasDerivAt hderiv hint : ∫ u in a..b, f' u = F b − F a`. `hderiv : ∀ x ∈ Set.uIcc a b, HasDerivAt F (f' x) x` — `rw [Set.uIcc_of_le hf] at hx` to get `Set.Icc`, build the log-derivative `(Real.hasDerivAt_log hsx.ne').comp x ((hasDerivAt_const x s).sub (hasDerivAt_id x))` for `log(s−u)`, combine `.sub`/`.const_mul`, and **retarget the value by `rw [show f' = <combinator value> from by field_simp; ring]; exact h3`** (NOT `convert`, which spawns instance/`fun`-eq subgoals through `HasDerivAt`). `hint` via `ContinuousOn.intervalIntegrable` + `ContinuousOn.div` (the denom-`≠0` goal isn't β-reduced — `show 2*x*(s−x) ≠ 0` then `positivity`). Finish by `simp only [hF]` (β-reduce `F b`, `F a`) and `Real.log_div`/`Real.log_mul` (all args `≠ 0` by `positivity`) + `ring`. (`InfiniteDepth`'s `inf_tc` is the same recipe with `1/(u²(s−u))` and a `−(1/s)·u⁻¹` antiderivative term, `hasDerivAt_inv`.)
 
+**For an `arsinh`-antiderivative integral (`1/(√(quadratic)·linear)`), collapse the chain-rule `√(1+z²)` and cancel via a `P²`-injected velocity lemma.** `unbalancedLearningTime_integral` (Saxe App. A, `∫ du/(√(c₀²+4u²)(s−u))`): the antiderivative is `arsinh(z u)·const`, `z u = (c₀²+4su)/(2|c₀|(u−s))`; build it as `((Real.hasDerivAt_arsinh (z x)).comp x (hnum.div hden hden_ne)).div_const P |>.neg` (`Real.hasDerivAt_arsinh x : HasDerivAt arsinh (√(1+x^2))⁻¹ x`). Two value lemmas make the retarget `field_simp; ring`-able: (1) **collapse the nested root** `√(1+(z x)²) = √(c₀²+4s²)·√(c₀²+4x²)/(2|c₀|(s−x))` by `rw [show 1+(z x)² = (…)² from ?_]; exact Real.sqrt_sq (nonneg)` — and inside the `?_`, **isolate the RHS sqrt-expansion in its own nested `show … = … from by rw [div_pow, mul_pow, Real.sq_sqrt, Real.sq_sqrt]`** so a bare `rw [div_pow]` doesn't fire on the LHS `(z x)²` first; (2) **simplify the quotient-rule velocity with `(√(c₀²+4s²))²` in the numerator, NOT `c₀²+4s²`** (`hZ' : … = -(√(c₀²+4s²))²/(2|c₀|(x−s)²)`, proved by `rw [Real.sq_sqrt]; field_simp; ring`) — injecting `P²` means the final retarget has no bare `c₀²+4s²` to clash with `P=√(c₀²+4s²)`, so `P²/P` cancels by pure field algebra in the sqrt-atoms. **Kill `|c₀|²` before `ring` with one `(2*|c₀|)^2 = 4*c₀^2` show (`rw [mul_pow, sq_abs]; ring`)** so no `|c₀|` survives into the polynomial identity. Using `arsinh` (not `log`) and `2|c₀|` (= `√(4c₀²)`) inside `z` makes one antiderivative valid for **both signs of `c₀`** (`F' = +f` either way; a `log`-form would need `c₀>0`). Numeric-checked ~1e-15 for `c₀` of both signs.
+
 **Compose a `rpow`-in-the-exponent limit / continuity.** `deepNonlinearity_tendsto` (`u^{2−2/m} → u²`): `(Real.continuousAt_const_rpow hu.ne').tendsto.comp hexp` where `hexp : (fun m => 2 − 2/(m:ℝ)) → 2` (`tendsto_one_div_atTop_nhds_zero_nat.const_mul`, normalize `2·(1/m)→2/m` with `mul_one_div`); bridge `u^(2:ℝ) = u^2` by `rw [← Real.rpow_natCast u 2]; norm_num`.
 
 **Reuse `eq_of_autonomous_ode` for any finite-dim invariant-manifold-via-uniqueness proof.** For depth-`N` symmetric-manifold forward-invariance (`deep_manifold_invariant`) the state space is `Fin m → ℝ`: package the `IsDeepFlow` RHS as `deepField`, prove it `ContDiff` with `contDiff_pi.2` + `ContDiff.div_const`/`.mul`/`.sub` and **`contDiff_prod (fun i _ => contDiff_pi.1 contDiff_id i)`** for each `∏ vᵢ` (the projections are `ContDiff`). The two solutions are `fun s => fun l => a l s` (`hasDerivAt_pi.2 (fun l => h.ha l t)`, derivative defeq to `deepField …`) and the constant-vector `fun s => fun _ => c s` (whose `deepField` value collapses by `Finset.prod_const`+`card_univ`/`card_erase_of_mem` to the `IsDeepSymFlow` value). `congrFun (… t) l` reads off `a l t = c t`.
@@ -258,6 +263,12 @@ Real / order lemmas used:
   (use `←` to fold `(x^y)^z`), then close the exponent identity `m·(2−2/m) = ↑(2(m−1))` with
   `push_cast [Nat.cast_sub hm]; field_simp` (`Nat.cast_sub (h : n ≤ m) : (↑(m−n) : ℝ) = ↑m − ↑n`
   is mandatory — `push_cast` won't touch Nat subtraction without it)
+
+Square-root / `arsinh` lemmas (`Mathlib/Analysis/SpecialFunctions/Sqrt.lean`, `…/Trigonometric/Inverse.lean`), for the unbalanced learning-time integral:
+- `Real.hasDerivAt_arsinh (x) : HasDerivAt arsinh (√(1 + x ^ 2))⁻¹ x` — the inverse-hyperbolic-sine derivative (`arsinh = log(x+√(x²+1))`, valid on all of ℝ — no sign hypothesis)
+- `Real.sq_sqrt (h : 0 ≤ x) : √x ^ 2 = x`; `Real.sqrt_sq (h : 0 ≤ x) : √(x ^ 2) = x`; `Real.sqrt_pos : 0 < √x ↔ 0 < x`; `Real.sqrt_nonneg x : 0 ≤ √x`
+- `sq_abs (a) : |a| ^ 2 = a ^ 2`; `abs_pos : 0 < |a| ↔ a ≠ 0`; `abs_nonneg a : 0 ≤ |a|` — for the `2|c₀|` (= `√(4c₀²)`) factor that makes the antiderivative sign-robust
+- `positivity` proves `0 < c₀ ^ 2` straight from a hypothesis `c₀ ≠ 0` (so `0 < c₀²+4s²` needs no manual `sq_pos`); but `0 < 2*|c₀|` needs `mul_pos (by norm_num) (abs_pos.mpr hc₀)` (positivity only gets `|c₀| ≥ 0`)
 
 Forward pointers (not yet used):
 - Per-coordinate gradient flow chosen over abstract `gradient` (Layer 1, done): raw `ℝ×ℝ` carries the sup-norm, *not* an inner product, so `gradient`/`HasGradientAt` would need `EuclideanSpace ℝ (Fin 2)` or `WithLp 2 (ℝ×ℝ)`. If a true `∇` form is ever wanted: `Mathlib/Analysis/Calculus/Gradient/Basic.lean`, bridged via `hasGradientAt_iff_hasFDerivAt`.

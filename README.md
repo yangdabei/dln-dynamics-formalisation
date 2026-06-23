@@ -23,6 +23,7 @@ The compiled paper is included as [`saxe-2014.pdf`](saxe-2014.pdf).
 | Asymptotics | `u_f(t) → s` as `t → ∞` (sigmoid reaches the fixed point) | §"time course" | `uf_tendsto_atTop` |
 | Learning time | `∫_{u₀}^{u_f} du/(2u(s−u)) = (1/2s) ln(u_f(s−u₀)/(u₀(s−u_f)))` | Eq. `u_int` | `learningTime_integral` |
 | Unbalanced (`a≠b`) | `u = ab` obeys `τ u' = (a²+b²)(s−u) = √(c₀²+4u²)(s−u)`, `c₀ = a²−b²` | App. A `hyper_dyn` | `hyperbolic_dyn`, `hyperbolic_dyn_sqrt` |
+| Unbalanced learning time | `∫_{u₀}^{u_f} du/(√(c₀²+4u²)(s−u)) = (1/√(c₀²+4s²))(arsinh(z(u₀)) − arsinh(z(u_f)))`, `z(u)=(c₀²+4su)/(2\|c₀\|(u−s))` | App. A (cf. `u_int`) | `unbalancedLearningTime_integral` |
 
 (All on the paper's regime `0 < u₀ < s`, `0 < τ`.)
 
@@ -75,11 +76,12 @@ per-layer diagonal-in-frame form is taken as a hypothesis (the depth-`N` analog 
 `InvariantManifold` takes manifold membership as a hypothesis); its forward-invariance
 in time is deferred.
 
-**Deferred** (future work): the unbalanced learning-*time* integral
-`∫ du/(√(c₀²+4u²)(s−u))` (Appendix A — the `u`-*dynamics* is done, only the messy
-hyperbolic integral remains); and the rectangular-diagonal `Σ³¹` generalization
-(non-square SVD reduction; see `PROGRESS.md`). The analytical core of the paper is
-otherwise complete.
+With the unbalanced learning-*time* integral now discharged
+(`unbalancedLearningTime_integral`, Appendix A: `∫ du/(√(c₀²+4u²)(s−u))` evaluated via the
+inverse-hyperbolic-sine antiderivative `unbalancedAntideriv`), the only remaining future
+work is the rectangular-diagonal `Σ³¹` generalization (non-square SVD reduction; see
+`PROGRESS.md`). **The analytical core of the paper — including all of Appendix A — is
+complete.**
 
 ## Build
 
@@ -115,7 +117,7 @@ DlnDynamics/DeepMatrixFlow.lean prodDesc, prodDesc_telescope, multilayerFlow_of_
 DlnDynamics/DeepReduction.lean above/belowProd_factored, isDeepFlow_of_gradFlow, deep_dyn_of_gradFlow (depth-N Phases B-C)
 DlnDynamics/TimeEquation.lean  uf_tendsto_atTop, learningTime_integral   (learning timescale, Eq. u_int)
 DlnDynamics/InfiniteDepth.lean deepNonlinearity_tendsto, infLearningTime_integral (N_l→∞ limit, Eqs. inf_dyn/inf_tc)
-DlnDynamics/UnbalancedDynamics.lean hyperbolic_dyn, hyperbolic_dyn_sqrt   (unbalanced a≠b, Appendix A)
+DlnDynamics/UnbalancedDynamics.lean hyperbolic_dyn, hyperbolic_dyn_sqrt, unbalancedLearningTime_integral (unbalanced a≠b + learning time, Appendix A)
 DlnDynamics/DeepManifoldInvariance.lean deep_manifold_invariant, deep_dyn_of_deepFlow_init (depth-N forward-invariance)
 scripts/no_sorry.sh            sorry / axiom gate (also run in CI)
 scripts/check_closed_form.py   numerical sanity check (ODE closed form)

@@ -4,6 +4,31 @@ Running narrative of the formalization — what got done, what's next. Newest
 session at the top. Reusable *lessons* (tactics, Mathlib gotchas, API) live in
 `CLAUDE.md`; this file is the *story* and the plan.
 
+## Session 2026-06-23 — Appendix A finished: the unbalanced learning-time integral
+
+**Done.** The last open analytical result of Saxe (2014) — the unbalanced (`a ≠ b`)
+learning-*time* integral — is now a real, gap-free theorem, appended to
+`DlnDynamics/UnbalancedDynamics.lean`. `#print axioms` = `[propext, Classical.choice, Quot.sound]`
+on both new results, `lake build` clean, sorry-gate clean. Closed form numerically verified to
+~1e-15 vs. Simpson quadrature for `c₀` of **both signs**.
+
+- **`unbalancedLearningTime_integral`** (Saxe App. A, the `a ≠ b` analogue of Eq. `u_int`):
+  separating the hyperbolic dynamics `τ u' = √(c₀²+4u²)(s−u)` and integrating,
+  `∫_{u₀}^{u_f} du/(√(c₀²+4u²)(s−u)) = (1/√(c₀²+4s²))(arsinh z(u₀) − arsinh z(u_f))`,
+  `z(u) = (c₀²+4su)/(2|c₀|(u−s))`. Second FTC on the antiderivative `unbalancedAntideriv`.
+- **`unbalancedAntideriv` / `hasDerivAt_unbalancedAntideriv`**: `F(u) = −arsinh(z u)/√(c₀²+4s²)`,
+  with `F' = 1/(√(c₀²+4u²)(s−u))` for `x < s`. Built from `Real.hasDerivAt_arsinh` ∘ quotient
+  rule, `.div_const`, `.neg`; the nested chain-rule root `√(1+z²)` collapses to
+  `√(c₀²+4s²)√(c₀²+4x²)/(2|c₀|(s−x))`, and a `(√(c₀²+4s²))²`-injected velocity lemma makes the
+  retarget pure field algebra in the sqrt-atoms. The inverse-hyperbolic sine `arsinh` (defined
+  on all ℝ) and the `2|c₀|` factor make **one** antiderivative valid for either sign of `c₀` — a
+  `log`-form would split into cases. (The paper's θ-parametrization, already flagged for its
+  factor-2 typos, is avoided entirely.) Lessons recorded in `CLAUDE.md`.
+
+**Appendix A is now complete** (hyperbolic `u`-dynamics + learning-time integral). The only
+remaining genuine generalization is the rectangular `Σ³¹` (non-square SVD reduction). **The
+analytical core of Saxe (2014) is fully formalized.**
+
 ## Session 2026-06-22 — Analytical core complete: infinite-depth, unbalanced, depth-`N` forward-invariance
 
 **Done.** Three more modules, closing out the analytical core of Saxe (2014). All gap-free
