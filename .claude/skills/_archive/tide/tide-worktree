@@ -1,0 +1,623 @@
+#!/usr/bin/env bash
+# tide-worktree: per-Tide git worktree management for concurrent-agent isolation.
+#
+# Background. Tide-loop excursions touch shared files in their seabed Lean repo
+# — the most contended being the top-level `<Repo>.lean` import list, which
+# every Tide that adds a new file edits. When two Tide agents share a single
+# checkout of the same Lean repo, they race on these files: import lines get
+# clobbered between `git add` and `git commit`, untracked files vanish on
+# branch-switch, and stray commits land with the wrong author's message.
+#
+# This script creates a dedicated `git worktree` per Tide branch, so each
+# agent has its own working directory and file-system edits cannot
+# interleave. The branches still share the same `.git` (so commits are
+# visible across worktrees once merged), but the working trees are
+# isolated.
+#
+# Coordination ledger. Concurrent sessions on the same host coordinate via
+# `projects/automation/active-tides.md` — a gitignored, flock-synchronised
+# file. Earlier versions of this tool committed every claim and release to
+# the SRI main branch, which produced ~3 commits per Tide and dominated SRI
+# history. The ledger is now local-only; its single-host shape matches the
+# actual deployment (all parallel sessions run on one machine). See
+# `active-tides.template.md` for the protocol; `active-tides.md` is
+# bootstrapped from that template the first time `create` runs on a host.
+#
+# Convention.
+#   Worktree directory: sri/lean/<repo>-tide-<topic>/   (gitignored by
+#                       sri/lean/.gitignore's `*/` rule, same as the
+#                       primary repo clone)
+#   Branch name:        tide/<topic>
+#   Default base:       main of <repo>
+#
+# Usage.
+#   tide-worktree create <repo> <topic> [<base-ref>] [--direction "<text>"]
+#       Create a worktree for a new tide. <base-ref> defaults to `main`;
+#       pass a previous tide's branch tip (e.g. `tide/quartic-moments`)
+#       for a linear-chain tide. Echoes the absolute worktree path on
+#       success, suitable for `cd "$(tide-worktree create ...)"`.
+#       After creating the worktree, runs `lake exe cache get` to seed
+#       the Mathlib build cache (fresh worktrees lack `.lake/build/`,
+#       which would otherwise force a from-source Mathlib rebuild).
+#       Set TIDE_SKIP_CACHE=1 to skip this step.
+#
+#       The optional --direction "<text>" argument appends an entry to
+#       the local active-tides.md ledger under flock, claiming the tide
+#       so concurrent sessions can detect overlap. The text should be a
+#       one-line semantic description (not a branch name). No git
+#       commit is created.
+#   tide-worktree release <repo> <topic> [--status <merged|abandoned|stale>] [--note "<text>"] [--keep-worktree]
+#       Update the active-tides.md entry to terminal status under flock,
+#       then remove the worktree directory (reclaiming its ~8 GB `.lake`
+#       build cache; the branch is preserved). Default --status is
+#       `merged`; pass `abandoned` for dead-end branches (force-discards
+#       a dirty tree) and `stale` for sessions that timed out. The
+#       optional --note becomes a parenthetical on the Status line.
+#       Removal is refused (release still succeeds) if the tree has
+#       uncommitted tracked source under merged/stale, so nothing
+#       unmerged is lost. Pass --keep-worktree to skip removal entirely.
+#       Leaving worktrees around is what let 100+ orphans pile up to
+#       760 GB of stale `.lake` caches in mid-2026.
+#   tide-worktree check <direction-text>
+#       Read active-tides.md and list any in-progress entries whose
+#       Direction line shares a non-trivial keyword (>= 4 chars, not
+#       a common stopword) with the given text. Exits 1 if any
+#       overlap, 0 if none. Useful as a preflight before deciding to
+#       claim.
+#   tide-worktree archive [--age-days N]
+#       Move terminal entries (Status: merged|abandoned|stale) older
+#       than N days (default 7) from active-tides.md into
+#       active-tides-archive.md (also gitignored). Idempotent and
+#       flock-protected; safe to run unattended.
+#   tide-worktree remove <repo> <topic> [--force]
+#       Remove the worktree (after merge or abandonment), reclaiming its
+#       ~8 GB `.lake` cache. Branch is preserved; only the working-tree
+#       directory is removed. Refuses if the tree has uncommitted tracked
+#       source unless --force. `release` already does this by default, so
+#       this is mainly for cleaning up worktrees released with
+#       --keep-worktree, or orphans. Use `git -C <repo> branch -D
+#       tide/<topic>` to delete the branch afterwards if desired.
+#   tide-worktree list
+#       List active tide worktrees across all sri/lean/<repo>/ repos.
+#   tide-worktree path <repo> <topic>
+#       Print the absolute path of an existing tide worktree.
+#
+# References.
+#   - lean/laplace/retrospectives/2026-05-02-tide-2d-pure-quartic.tex
+#     (the original "concurrent agents need filesystem isolation" lesson)
+#   - lean/laplace/retrospectives/2026-05-06-tide-cross-susc-deriv-harmonic.tex
+#     (one more data point of the same failure class)
+
+set -euo pipefail
+
+usage() {
+    # Print the "Usage." section through (but not including) "References."
+    awk '/^# Usage\./,/^# References/' "$0" | grep -v '^# References' | sed 's/^# \{0,1\}//'
+}
+
+# Resolve the SRI repo root regardless of cwd.
+sri_root() {
+    if [[ -n "${SRI_ROOT:-}" ]]; then
+        echo "$SRI_ROOT"
+        return
+    fi
+    # Walk upward from this script to the SRI root (the dir containing
+    # `lean/`, `papers/`, `projects/`).
+    local dir
+    dir=$(cd "$(dirname "$0")" && pwd)
+    while [[ "$dir" != "/" ]]; do
+        if [[ -d "$dir/lean" && -d "$dir/papers" && -d "$dir/projects" ]]; then
+            echo "$dir"
+            return
+        fi
+        dir=$(dirname "$dir")
+    done
+    echo "tide-worktree: cannot locate SRI root (containing lean/, papers/, projects/)" >&2
+    exit 1
+}
+
+require_repo_dir() {
+    local sri=$1 repo=$2
+    local repo_dir="$sri/lean/$repo"
+    if [[ ! -d "$repo_dir/.git" && ! -f "$repo_dir/.git" ]]; then
+        echo "tide-worktree: '$repo_dir' is not a git repo (or its worktree)" >&2
+        exit 1
+    fi
+    echo "$repo_dir"
+}
+
+# Resolve ledger path; bootstrap from template if missing. Args: sri_root.
+ledger_path() {
+    local sri=$1
+    local ledger="$sri/projects/automation/active-tides.md"
+    local template="$sri/projects/automation/active-tides.template.md"
+    if [[ ! -f "$ledger" ]]; then
+        if [[ ! -f "$template" ]]; then
+            echo "tide-worktree: neither active-tides.md nor active-tides.template.md exist at $sri/projects/automation/" >&2
+            return 1
+        fi
+        cp "$template" "$ledger"
+    fi
+    echo "$ledger"
+}
+
+# Acquire an exclusive flock on the ledger lock file and run the rest of
+# the function under it. Usage:
+#   with_ledger_lock <sri> <fn> [args...]
+# The lock is auto-released when the subshell exits.
+with_ledger_lock() {
+    local sri=$1
+    shift
+    local lock="$sri/projects/automation/.active-tides.lock"
+    # Make sure the lock file exists so flock has something to grab.
+    : >> "$lock"
+    (
+        flock -x 9
+        "$@"
+    ) 9>"$lock"
+}
+
+# Append a claim entry to the active-tides ledger.
+# Args: sri_root, repo, topic, branch, direction_text.
+# MUST be called inside with_ledger_lock.
+ledger_claim() {
+    local sri=$1 repo=$2 topic=$3 branch=$4 direction=$5
+    local ledger
+    ledger=$(ledger_path "$sri") || return 1
+    local now
+    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    {
+        echo ""
+        echo "## ${repo}/${topic}"
+        echo "- Claimed: ${now}"
+        echo "- Branch: ${branch}"
+        echo "- Direction: ${direction}"
+        echo "- Status: in-progress"
+    } >> "$ledger"
+}
+
+# Update a ledger entry's Status line. Args: sri, repo, topic, status, note_or_empty.
+# Finds the LAST matching "## <repo>/<topic>" header and rewrites the next
+# "- Status: in-progress" line below it. Idempotent for already-terminal
+# entries (no-op).
+# MUST be called inside with_ledger_lock.
+ledger_release() {
+    local sri=$1 repo=$2 topic=$3 status=$4 note=${5:-}
+    local ledger
+    ledger=$(ledger_path "$sri") || return 1
+    local header="## ${repo}/${topic}"
+    local lineno
+    lineno=$(awk -v h="$header" '$0 == h { last = NR } END { print last }' "$ledger")
+    if [[ -z "$lineno" ]]; then
+        echo "tide-worktree release: no ledger entry for ${repo}/${topic}" >&2
+        return 1
+    fi
+    local status_line="- Status: ${status}"
+    if [[ -n "$note" ]]; then
+        status_line="${status_line} (${note})"
+    fi
+    # Replace the first "- Status: in-progress" line at or after $lineno,
+    # but only within this entry's block (bail out at the next "## " header
+    # so an already-terminal entry stays a clean no-op instead of bleeding
+    # into the next entry's Status line).
+    awk -v start="$lineno" -v new="$status_line" '
+        NR == start { in_block = 1; print; next }
+        in_block && /^## / { in_block = 0 }
+        in_block && /^- Status: in-progress/ { print new; in_block = 0; next }
+        { print }
+    ' "$ledger" > "$ledger.tmp" && mv "$ledger.tmp" "$ledger"
+}
+
+# Move terminal entries older than $age_days into the archive file.
+# Args: sri, age_days.
+# MUST be called inside with_ledger_lock.
+ledger_archive() {
+    local sri=$1 age_days=$2
+    local ledger
+    ledger=$(ledger_path "$sri") || return 1
+    local archive="$sri/projects/automation/active-tides-archive.md"
+    if [[ ! -f "$archive" ]]; then
+        {
+            echo "# Active tides — archive"
+            echo ""
+            echo "Terminal entries (merged|abandoned|stale) older than the archive"
+            echo "threshold, evicted from active-tides.md by"
+            echo "\`tide-worktree archive\`. Gitignored, append-only."
+            echo ""
+        } > "$archive"
+    fi
+    # An "entry" starts at a "## <repo>/<topic>" header and runs until the
+    # next "## " header or EOF. Compute each entry's Claimed timestamp and
+    # Status; if Status ∈ {merged, abandoned, stale} AND age >= age_days,
+    # route to archive; otherwise keep in ledger.
+    local cutoff
+    cutoff=$(date -u -d "${age_days} days ago" +"%Y-%m-%dT%H:%M:%SZ")
+    awk -v cutoff="$cutoff" -v archive="$archive" '
+        function flush_entry() {
+            if (in_entry == 0) return
+            # Decide: archive or keep?
+            is_terminal = (status == "merged" || status == "abandoned" || status == "stale")
+            old_enough = (claimed != "" && claimed < cutoff)
+            if (is_terminal && old_enough) {
+                # Append to archive (single \n separator).
+                print "" >> archive
+                for (i = 1; i <= n; i++) print buf[i] >> archive
+            } else {
+                # Keep in ledger.
+                for (i = 1; i <= n; i++) print buf[i]
+            }
+            in_entry = 0; n = 0; status = ""; claimed = ""
+        }
+        # Header section (before first entry): pass through verbatim.
+        !in_entry && !/^## [^ ]+\/[^ ]+/ { print; next }
+        /^## [^ ]+\/[^ ]+/ {
+            flush_entry()
+            in_entry = 1
+            n = 1; buf[1] = $0
+            next
+        }
+        in_entry {
+            n++; buf[n] = $0
+            if ($0 ~ /^- Claimed: /) { claimed = $0; sub(/^- Claimed: /, "", claimed) }
+            if ($0 ~ /^- Status: /)  { status  = $0; sub(/^- Status: /,  "", status);  sub(/ \(.*\)$/, "", status) }
+        }
+        END { flush_entry() }
+    ' "$ledger" > "$ledger.tmp" && mv "$ledger.tmp" "$ledger"
+}
+
+# Reliably reclaim a worktree directory (and its ~8 GB `.lake/` build cache).
+# Args: repo_dir, worktree_dir, topic, force(0|1).
+# Refuses if there are uncommitted *tracked* (non-gitignored) changes unless
+# force=1 — the gitignored `.lake/` never blocks removal. Returns 0 on success
+# or nothing-to-do, 1 if it skipped because of dirty source.
+remove_worktree_dir() {
+    local repo_dir=$1 worktree_dir=$2 topic=$3 force=$4
+    if [[ ! -d "$worktree_dir" ]]; then
+        return 0
+    fi
+    local dirty
+    dirty=$(git -C "$worktree_dir" status --porcelain --untracked-files=no 2>/dev/null)
+    if [[ -n "$dirty" && "$force" != 1 ]]; then
+        echo "tide-worktree: '$worktree_dir' has uncommitted tracked changes; NOT removed." >&2
+        echo "$dirty" | sed 's/^/    /' >&2
+        echo "  commit/merge the work, then re-run remove; or force-discard with --force." >&2
+        return 1
+    fi
+    # `--force` (once) drops the gitignored `.lake/` and any untracked files;
+    # the rm -rf fallback covers an already-detached worktree whose git admin
+    # entry is gone. prune cleans up the parent repo's bookkeeping either way.
+    git -C "$repo_dir" worktree remove --force "$worktree_dir" 2>/dev/null || rm -rf "$worktree_dir"
+    git -C "$repo_dir" worktree prune 2>/dev/null || true
+    echo "removed worktree at $worktree_dir (reclaimed its .lake cache); branch tide/${topic} preserved"
+    return 0
+}
+
+cmd_create() {
+    if [[ $# -lt 2 ]]; then
+        echo "tide-worktree create: usage: create <repo> <topic> [<base-ref>] [--direction \"<text>\"]" >&2
+        exit 1
+    fi
+    local repo=$1 topic=$2
+    shift 2
+    # Parse remaining args: optional positional base-ref, optional --direction.
+    local base_ref="main"
+    local direction=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --direction)
+                if [[ $# -lt 2 ]]; then
+                    echo "tide-worktree create: --direction needs a text argument" >&2
+                    exit 1
+                fi
+                direction=$2
+                shift 2
+                ;;
+            *)
+                base_ref=$1
+                shift
+                ;;
+        esac
+    done
+    local sri repo_dir worktree_dir branch
+    sri=$(sri_root)
+    repo_dir=$(require_repo_dir "$sri" "$repo")
+    worktree_dir="$sri/lean/${repo}-tide-${topic}"
+    branch="tide/${topic}"
+
+    if [[ -e "$worktree_dir" ]]; then
+        echo "tide-worktree: '$worktree_dir' already exists" >&2
+        echo "  remove it first with: tide-worktree remove $repo $topic" >&2
+        exit 1
+    fi
+
+    # If the branch already exists on the canonical repo, attach the
+    # worktree to it; otherwise create a new branch from base-ref.
+    if git -C "$repo_dir" rev-parse --verify --quiet "$branch" >/dev/null; then
+        git -C "$repo_dir" worktree add "$worktree_dir" "$branch"
+    else
+        git -C "$repo_dir" worktree add -b "$branch" "$worktree_dir" "$base_ref"
+    fi
+
+    # Seed the Mathlib build cache. Fresh worktrees inherit `.lake/packages/`
+    # from the canonical clone but NOT `.lake/build/`, so a naive `lake build`
+    # in the worktree re-compiles ~2700 Mathlib files from source. Running
+    # `lake exe cache get` restores the prebuilt oleans in ~15s.
+    # Lesson recorded in lean/laplace/retrospectives/2026-05-07-tide-sextic-j-function.tex.
+    # Failures here are non-fatal: a worktree that has no internet still
+    # works (just slowly), and tests that need offline operation should
+    # set TIDE_SKIP_CACHE=1.
+    if [[ -z "${TIDE_SKIP_CACHE:-}" ]] && [[ -f "$worktree_dir/lakefile.toml" || -f "$worktree_dir/lakefile.lean" ]]; then
+        if command -v lake >/dev/null 2>&1; then
+            (cd "$worktree_dir" && lake exe cache get >&2 2>/dev/null) || \
+                echo "tide-worktree: 'lake exe cache get' failed (non-fatal)" >&2
+        fi
+    fi
+
+    # If a direction was given, claim in the active-tides ledger.
+    if [[ -n "$direction" ]]; then
+        with_ledger_lock "$sri" ledger_claim "$sri" "$repo" "$topic" "$branch" "$direction"
+    fi
+
+    # Echo the absolute path. Suitable for `cd $(tide-worktree create ...)`.
+    echo "$worktree_dir"
+}
+
+cmd_release() {
+    if [[ $# -lt 2 ]]; then
+        echo "tide-worktree release: usage: release <repo> <topic> [--status <merged|abandoned|stale>] [--note \"<text>\"]" >&2
+        exit 1
+    fi
+    local repo=$1 topic=$2
+    shift 2
+    local status="merged"
+    local note=""
+    local keep_worktree=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --status)
+                if [[ $# -lt 2 ]]; then
+                    echo "tide-worktree release: --status needs an argument" >&2
+                    exit 1
+                fi
+                status=$2
+                shift 2
+                ;;
+            --note)
+                if [[ $# -lt 2 ]]; then
+                    echo "tide-worktree release: --note needs an argument" >&2
+                    exit 1
+                fi
+                note=$2
+                shift 2
+                ;;
+            --keep-worktree)
+                keep_worktree=1
+                shift
+                ;;
+            *)
+                echo "tide-worktree release: unknown arg '$1'" >&2
+                exit 1
+                ;;
+        esac
+    done
+    case "$status" in
+        merged|abandoned|stale) ;;
+        *)
+            echo "tide-worktree release: --status must be one of: merged, abandoned, stale" >&2
+            exit 1
+            ;;
+    esac
+    local sri
+    sri=$(sri_root)
+    with_ledger_lock "$sri" ledger_release "$sri" "$repo" "$topic" "$status" "$note"
+
+    # Self-cleaning: a released tide is terminal, so its worktree (and the
+    # ~8 GB `.lake/` cache it carries) should not linger. Remove it by default
+    # unless --keep-worktree. `abandoned` force-discards any dirty tree since
+    # the work is being thrown away; `merged`/`stale` refuse on dirty *source*
+    # so nothing unmerged is lost (re-run `remove --force` once it's safe).
+    if [[ "$keep_worktree" == 1 ]]; then
+        echo "note: --keep-worktree given; '$sri/lean/${repo}-tide-${topic}' (incl. its .lake cache) left on disk."
+        echo "  remove it later with: tide-worktree remove $repo $topic"
+        return 0
+    fi
+    local repo_dir worktree_dir force=0
+    repo_dir=$(require_repo_dir "$sri" "$repo")
+    worktree_dir="$sri/lean/${repo}-tide-${topic}"
+    [[ "$status" == "abandoned" ]] && force=1
+    remove_worktree_dir "$repo_dir" "$worktree_dir" "$topic" "$force" || true
+}
+
+cmd_archive() {
+    local age_days=7
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --age-days)
+                if [[ $# -lt 2 ]]; then
+                    echo "tide-worktree archive: --age-days needs an integer argument" >&2
+                    exit 1
+                fi
+                age_days=$2
+                shift 2
+                ;;
+            *)
+                echo "tide-worktree archive: unknown arg '$1'" >&2
+                exit 1
+                ;;
+        esac
+    done
+    if ! [[ "$age_days" =~ ^[0-9]+$ ]]; then
+        echo "tide-worktree archive: --age-days must be a non-negative integer" >&2
+        exit 1
+    fi
+    local sri
+    sri=$(sri_root)
+    with_ledger_lock "$sri" ledger_archive "$sri" "$age_days"
+}
+
+cmd_check() {
+    if [[ $# -lt 1 ]]; then
+        echo "tide-worktree check: usage: check <direction-text>" >&2
+        exit 1
+    fi
+    local direction=$*
+    local sri ledger
+    sri=$(sri_root)
+    ledger=$(ledger_path "$sri") || exit 1
+    # Extract non-trivial keywords from the input direction.
+    # - lowercase, alphanumeric tokens
+    # - length >= 4
+    # - drop a small stopword list (English common words that aren't research-bearing)
+    local keywords
+    keywords=$(printf '%s\n' "$direction" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -c 'a-z0-9' ' ' \
+        | tr -s ' ' '\n' \
+        | awk 'length($0) >= 4' \
+        | awk '!/^(with|from|that|this|them|they|were|have|been|into|onto|over|each|such|when|then|than|also|more|most|just|very|only|able|some|other|will|like|make|made|next|same|both|here|there|where|which|while|about|after|before|along|across|under|above|between|using|used|user|case|step|tide|file)$/' \
+        | sort -u)
+    if [[ -z "$keywords" ]]; then
+        echo "tide-worktree check: input had no usable keywords" >&2
+        echo "  showing all in-progress entries for human review:" >&2
+        awk '
+            /^```/ { in_fence = !in_fence; next }
+            in_fence { next }
+            /^## / { header = $0; direction = ""; in_progress = 0; in_entry = 1; next }
+            in_entry && /^- Direction:/ { direction = $0 }
+            in_entry && /^- Status: in-progress/ { in_progress = 1 }
+            in_entry && /^$/ {
+                if (in_progress) { print header; print direction; print "" }
+                in_entry = 0
+            }
+        ' "$ledger"
+        exit 0
+    fi
+    # Find in-progress entries whose Direction line contains any keyword.
+    # Skip fenced code blocks (the docs at the top of active-tides.md contain
+    # an example entry that would otherwise match).
+    local matches
+    matches=$(awk -v kws="$keywords" '
+        BEGIN { n = split(kws, arr, "\n") }
+        /^```/ { in_fence = !in_fence; next }
+        in_fence { next }
+        /^## / { header = $0; direction = ""; in_progress = 0; in_entry = 1; next }
+        in_entry && /^- Direction:/ { direction = tolower($0) }
+        in_entry && /^- Status: in-progress/ { in_progress = 1 }
+        in_entry && (/^$/ || /^## /) {
+            if (in_progress && direction) {
+                for (i = 1; i <= n; i++) {
+                    if (arr[i] != "" && index(direction, arr[i]) > 0) {
+                        print header
+                        print direction
+                        print "  matched on keyword: " arr[i]
+                        print ""
+                        break
+                    }
+                }
+            }
+            in_entry = 0
+            if (/^## /) { header = $0; direction = ""; in_progress = 0; in_entry = 1 }
+        }
+        END {
+            if (in_entry && in_progress && direction) {
+                for (i = 1; i <= n; i++) {
+                    if (arr[i] != "" && index(direction, arr[i]) > 0) {
+                        print header
+                        print direction
+                        print "  matched on keyword: " arr[i]
+                        print ""
+                        break
+                    }
+                }
+            }
+        }
+    ' "$ledger")
+    if [[ -n "$matches" ]]; then
+        echo "tide-worktree check: potential overlap with in-progress entries:"
+        echo ""
+        echo "$matches"
+        exit 1
+    fi
+    exit 0
+}
+
+cmd_remove() {
+    if [[ $# -lt 2 ]]; then
+        echo "tide-worktree remove: usage: remove <repo> <topic> [--force]" >&2
+        exit 1
+    fi
+    local repo=$1 topic=$2
+    shift 2
+    local force=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force) force=1; shift ;;
+            *) echo "tide-worktree remove: unknown arg '$1'" >&2; exit 1 ;;
+        esac
+    done
+    local sri repo_dir worktree_dir
+    sri=$(sri_root)
+    repo_dir=$(require_repo_dir "$sri" "$repo")
+    worktree_dir="$sri/lean/${repo}-tide-${topic}"
+
+    if [[ ! -d "$worktree_dir" ]]; then
+        echo "tide-worktree: '$worktree_dir' does not exist" >&2
+        exit 1
+    fi
+
+    remove_worktree_dir "$repo_dir" "$worktree_dir" "$topic" "$force" || exit 1
+    echo "  to delete the branch:  git -C $repo_dir branch -D tide/${topic}"
+}
+
+cmd_list() {
+    local sri
+    sri=$(sri_root)
+    local entry
+    for entry in "$sri/lean/"*; do
+        [[ -d "$entry/.git" ]] || continue
+        local repo
+        repo=$(basename "$entry")
+        # Skip the worktree directories themselves (they have a .git file,
+        # not directory; we listed `-d .git` above to filter them).
+        local listing
+        listing=$(git -C "$entry" worktree list)
+        # Skip if the only worktree is the canonical repo itself.
+        local non_canonical
+        non_canonical=$(echo "$listing" | grep -v "^$entry " || true)
+        if [[ -n "$non_canonical" ]]; then
+            echo "=== $repo ==="
+            echo "$listing"
+            echo ""
+        fi
+    done
+}
+
+cmd_path() {
+    if [[ $# -lt 2 ]]; then
+        echo "tide-worktree path: usage: path <repo> <topic>" >&2
+        exit 1
+    fi
+    local repo=$1 topic=$2
+    local sri worktree_dir
+    sri=$(sri_root)
+    worktree_dir="$sri/lean/${repo}-tide-${topic}"
+    if [[ ! -d "$worktree_dir" ]]; then
+        echo "tide-worktree: '$worktree_dir' does not exist" >&2
+        exit 1
+    fi
+    echo "$worktree_dir"
+}
+
+if [[ $# -lt 1 ]]; then usage; exit 1; fi
+
+case "$1" in
+    create)  shift; cmd_create "$@" ;;
+    release) shift; cmd_release "$@" ;;
+    check)   shift; cmd_check "$@" ;;
+    archive) shift; cmd_archive "$@" ;;
+    remove)  shift; cmd_remove "$@" ;;
+    list)    shift; cmd_list "$@" ;;
+    path)    shift; cmd_path "$@" ;;
+    -h|--help|help) usage ;;
+    *) echo "tide-worktree: unknown subcommand '$1'" >&2; usage >&2; exit 1 ;;
+esac

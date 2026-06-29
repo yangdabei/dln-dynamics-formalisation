@@ -1,0 +1,1952 @@
+#!/usr/bin/env python3
+"""tide-mirror: render a tide retrospective .tex into a therisensea HTML mirror.
+
+Step 4 of the Tide loop calls for a 1-to-1 HTML mirror of the LaTeX
+retrospective on therisensea.org (see ../tide/SKILL.md). This script
+automates that step: it reads <repo>/retrospectives/<slug>.tex, emits
+the HTML page in the therisensea clone's tides/<slug>/index.html, and
+splices the entry into the chronological home index.
+
+The conventions match the previously-mirrored retrospectives on
+therisensea/main (see commits 938201b and f5992a0):
+
+  - <h1>Tide retrospective: <em>title</em></h1> if the source title is
+    \\emph-wrapped, otherwise <h1>Tide retrospective: title</h1>.
+  - Header back-link, no nav.
+  - Kicker line "<YYYY-MM-DD> · <repo-slug>".
+  - Abstract rendered as plain paragraphs.
+  - \\section{X} -> <h2>X</h2>; \\paragraph{X} -> <h4>X.</h4>.
+  - \\gptbox / \\userbox / \\claudebox -> <blockquote> with a <strong> tag.
+  - Theorem-like \\begin{quote}\\itshape ... \\end{quote} -> <blockquote><em>...</em></blockquote>.
+  - Footnotes dropped.
+  - Display math \\[...\\] normalised to $$...$$ (KaTeX handles both).
+
+Usage.
+
+  tide-mirror render <repo> <slug>
+      Render a single retrospective. <repo> is the seabed Lean repo
+      under sri/lean/ (e.g. modes-lean); <slug> is the .tex basename
+      with or without the .tex extension. Writes
+      <therisensea>/tides/<slug>/index.html.
+
+  tide-mirror close <repo> <slug>
+      Render + splice into the home index. Use this at the end of a
+      Tide's Step 4 — it produces the page and updates the chronological
+      list in one shot.
+
+  tide-mirror reindex
+      Regenerate <therisensea>/index.html from every tides/*/index.html
+      directory. Use after manual edits, deletions, or to backfill.
+
+  tide-mirror sync
+      For every retrospective .tex under sri/lean/*/retrospectives/,
+      ensure tides/<slug>/index.html exists in the therisensea clone.
+      Skips entries already present. Then reindex. Useful for backfill.
+
+Path discovery.
+
+  SRI root: the directory containing this script, walking upward to
+            find lean/, papers/, projects/. Override with SRI_ROOT.
+  therisensea clone: the THERISENSEA_DIR env var, or a sibling of the
+            SRI root's parent named "therisensea", or fall back to
+            ~/timaeus/therisensea. Override with --therisensea.
+
+Slug conventions.
+
+  Mobius-surface retrospectives use the dir slug without "-tide-"
+  (matching 2026-05-19-mobius-surface-hasfderiv, hand-mirrored on
+  origin/main). All other tides keep the "-tide-" segment.
+"""
+
+from __future__ import annotations
+
+import argparse
+import html
+import os
+import re
+import sys
+from pathlib import Path
+
+# Single source of truth for the tab nav (shared with tide-digest), so a tab
+# added here is not clobbered by another generator's hardcoded template.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from site_nav import render_nav  # noqa: E402
+
+# ----------------------------------------------------------------------------
+# Path discovery.
+# ----------------------------------------------------------------------------
+
+
+def find_sri_root() -> Path:
+    if env := os.environ.get("SRI_ROOT"):
+        return Path(env).resolve()
+    here = Path(__file__).resolve().parent
+    for d in [here] + list(here.parents):
+        if (d / "lean").is_dir() and (d / "papers").is_dir() and (d / "projects").is_dir():
+            return d
+    sys.exit("tide-mirror: cannot locate SRI root (containing lean/, papers/, projects/)")
+
+
+def find_therisensea(override: str | None) -> Path:
+    if override:
+        p = Path(override).resolve()
+        if not p.is_dir():
+            sys.exit(f"tide-mirror: --therisensea path does not exist: {p}")
+        return p
+    if env := os.environ.get("THERISENSEA_DIR"):
+        return Path(env).resolve()
+    sri = find_sri_root()
+    candidates = [
+        sri.parent / "therisensea",
+        Path.home() / "timaeus" / "therisensea",
+    ]
+    for c in candidates:
+        if c.is_dir():
+            return c.resolve()
+    sys.exit(
+        "tide-mirror: cannot find therisensea clone. Set THERISENSEA_DIR or "
+        "pass --therisensea <path>."
+    )
+
+
+def output_slug(source_slug: str) -> str:
+    """Apply the mobius-surface "-tide-" stripping convention."""
+    if "-tide-mobius-surface-" in source_slug:
+        return source_slug.replace("-tide-", "-", 1)
+    return source_slug
+
+
+def find_tex(sri: Path, repo: str, slug: str) -> Path:
+    slug = slug.removesuffix(".tex")
+    candidate = sri / "lean" / repo / "retrospectives" / f"{slug}.tex"
+    if not candidate.is_file():
+        sys.exit(f"tide-mirror: no such file: {candidate}")
+    return candidate
+
+
+# ----------------------------------------------------------------------------
+# Kinds: "tide" (Theory tab) vs "experiment" (Experiments tab).
+# ----------------------------------------------------------------------------
+#
+# An experiment retrospective has a slug containing "-experiment-" (e.g.
+# 2026-05-20-experiment-radial-sextic-2d.tex) and is mirrored to
+# therisensea/experiments/<slug>/, indexed in therisensea/experiments/index.html.
+# Everything else routes to the Theory tab as before.
+
+KIND_CONFIG: dict[str, dict] = {
+    "tide": {
+        "subdir": "tides",
+        "url_prefix": "/tides/",
+        "begin_marker": "<!-- tide-entries:begin -->",
+        "end_marker": "<!-- tide-entries:end -->",
+        "h1_prefix": "Tide retrospective",
+        "back_label": "All tides",
+        "back_href": "/tides/",
+        "index_relpath": "tides/index.html",
+    },
+    "experiment": {
+        "subdir": "experiments",
+        "url_prefix": "/experiments/",
+        "begin_marker": "<!-- experiment-entries:begin -->",
+        "end_marker": "<!-- experiment-entries:end -->",
+        "h1_prefix": "Experiment retrospective",
+        "back_label": "All experiments",
+        "back_href": "/experiments/",
+        "index_relpath": "experiments/index.html",
+    },
+    "review": {
+        "subdir": "reviews",
+        "url_prefix": "/reviews/",
+        "begin_marker": "<!-- review-entries:begin -->",
+        "end_marker": "<!-- review-entries:end -->",
+        "h1_prefix": "Review retrospective",
+        "back_label": "All reviews",
+        "back_href": "/reviews/",
+        "index_relpath": "reviews/index.html",
+    },
+}
+
+
+def kind_for_slug(slug: str) -> str:
+    """Route slug to kind by filename convention: experiment retrospectives have
+    ``-experiment-`` (e.g. 2026-05-20-experiment-foo), review retrospectives have
+    ``-review-`` (e.g. 2026-05-31-review-foo). Everything else is a tide."""
+    if "-experiment-" in slug:
+        return "experiment"
+    if "-review-" in slug:
+        return "review"
+    return "tide"
+
+
+def kind_config(kind: str) -> dict:
+    if kind not in KIND_CONFIG:
+        raise ValueError(f"unknown kind: {kind!r}")
+    return KIND_CONFIG[kind]
+
+
+def index_path_for(therisensea: Path, kind: str) -> Path:
+    return therisensea / kind_config(kind)["index_relpath"]
+
+
+def pages_root_for(therisensea: Path, kind: str) -> Path:
+    return therisensea / kind_config(kind)["subdir"]
+
+
+# ----------------------------------------------------------------------------
+# Templates.
+# ----------------------------------------------------------------------------
+
+
+PAGE_HEADER = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html_title}</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="/assets/math.js" defer></script>
+</head>
+<body>
+  <header>
+    <p class="site-title"><a href="/" style="border:none;color:inherit;">The Risen Sea</a></p>
+    <p class="back"><a href="{back_href}">&larr; {back_label}</a></p>
+  </header>
+
+  <main>
+    <p style="font-family: var(--sans); font-size: 0.8rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 0.5rem;">{kicker}</p>
+    <h1>{h1_prefix}: {h1_inner}</h1>
+
+"""
+
+PAGE_FOOTER = """
+  </main>
+
+  <footer>
+    <p><a href="{back_href}">&larr; {back_label}</a></p>
+  </footer>
+</body>
+</html>
+"""
+
+
+# Fallback index templates — only used if the existing index.html is missing
+# the splice markers. Normally render_index splices into the existing file
+# (preserving tagline, tab nav, and hand edits to header/footer).
+INDEX_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Risen Sea</title>
+  <meta name="description" content="A chronological log of completed tide steps in an automated research programme on singular learning theory, formalised in Lean.">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="/assets/math.js" defer></script>
+</head>
+<body>
+  <header>
+    <p class="site-title"><a href="/" style="border:none;color:inherit;">The Risen Sea</a></p>
+    <p class="tagline">An automated research program in foundations of AI alignment, combining Claude/GPT, autoformalisation in Lean, and experiments.</p>
+{nav}
+  </header>
+
+  <main>
+    <ul class="entries">
+<!-- tide-entries:begin -->
+
+{entries}
+
+<!-- tide-entries:end -->
+    </ul>
+  </main>
+
+  <footer>
+    <p>Generated by the tide loop. Pages mirror retrospectives in <code>sri/lean/&lt;repo&gt;/retrospectives/</code>.</p>
+  </footer>
+</body>
+</html>
+"""
+
+
+EXPERIMENT_INDEX_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Experiments &mdash; The Risen Sea</title>
+  <meta name="description" content="Empirical companion studies to the Lean-formalised tides logged on The Risen Sea.">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="/assets/math.js" defer></script>
+</head>
+<body>
+  <header>
+    <p class="site-title"><a href="/" style="border:none;color:inherit;">The Risen Sea</a></p>
+    <p class="tagline">Empirical companion studies to the Lean-formalised tides. Each entry pairs an experimental pipeline (SGLD-LLC estimators, sampler comparisons, held-out tests) with the formal RLCT value it cross-checks.</p>
+{nav}
+  </header>
+
+  <main>
+    <ul class="entries">
+<!-- experiment-entries:begin -->
+
+{entries}
+
+<!-- experiment-entries:end -->
+    </ul>
+  </main>
+
+  <footer>
+  </footer>
+</body>
+</html>
+"""
+
+
+REVIEW_INDEX_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reviews &mdash; The Risen Sea</title>
+  <meta name="description" content="Independent reviews of the Lean-formalised tides logged on The Risen Sea.">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="/assets/math.js" defer></script>
+</head>
+<body>
+  <header>
+    <p class="site-title"><a href="/" style="border:none;color:inherit;">The Risen Sea</a></p>
+    <p class="tagline">Independent second-eye passes over the Lean-formalised tides. Each entry has GPT-5.5 Pro audit a landed file for fidelity to its informal content and for signature-preserving simplifications.</p>
+{nav}
+  </header>
+
+  <main>
+    <ul class="entries">
+<!-- review-entries:begin -->
+
+{entries}
+
+<!-- review-entries:end -->
+    </ul>
+  </main>
+
+  <footer>
+  </footer>
+</body>
+</html>
+"""
+
+
+def fallback_template(kind: str) -> str:
+    if kind == "experiment":
+        return EXPERIMENT_INDEX_TEMPLATE
+    if kind == "review":
+        return REVIEW_INDEX_TEMPLATE
+    return INDEX_TEMPLATE
+
+
+# ----------------------------------------------------------------------------
+# Brace-balanced helpers.
+# ----------------------------------------------------------------------------
+
+
+def find_matching_brace(s: str, start: int) -> int:
+    assert s[start] == "{"
+    depth = 1
+    j = start + 1
+    while j < len(s):
+        c = s[j]
+        if c == "\\" and j + 1 < len(s):
+            j += 2
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return -1
+
+
+def replace_brace_command(s: str, cmd: str, transform) -> str:
+    # (?![A-Za-z]) handles both letter-only cmds (where \b would also work)
+    # and cmds ending in a symbol like `section*` (where \b between `*` and
+    # the following `{` is NOT a word boundary and \b silently fails).
+    pat = re.compile(r"\\" + re.escape(cmd) + r"(?![A-Za-z])\s*\{")
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        m = pat.search(s, i)
+        if not m:
+            out.append(s[i:])
+            break
+        out.append(s[i:m.start()])
+        brace = m.end() - 1
+        close = find_matching_brace(s, brace)
+        if close == -1:
+            out.append(s[m.start():m.end()])
+            i = m.end()
+            continue
+        inner = s[brace + 1:close]
+        out.append(transform(inner))
+        i = close + 1
+    return "".join(out)
+
+
+def strip_resizebox(s: str) -> str:
+    r"""Unwrap ``\resizebox{w}{h}{BODY}`` to ``BODY``.
+
+    ``\resizebox`` is a graphicx macro that KaTeX cannot render; left in
+    place inside a ``$$...$$`` block it breaks the *entire* equation. The
+    common offending idiom is ``$$ \resizebox{0.98\linewidth}{!}{$ M $} $$``
+    — authors reach for it to shrink a wide matrix product. When BODY is
+    itself ``$...$``-delimited we drop the inner ``$`` so the result is
+    clean math inside the surrounding ``$$``. Must run before ``stash_math``
+    so the math captured for client-side KaTeX is already clean."""
+    needle = "\\resizebox"
+    out: list[str] = []
+    i = 0
+    n = len(s)
+    while True:
+        j = s.find(needle, i)
+        if j == -1:
+            out.append(s[i:])
+            return "".join(out)
+        out.append(s[i:j])
+        # Parse three balanced brace groups: {width}{height}{body}.
+        p = j + len(needle)
+        groups: list[tuple[int, int]] = []
+        while len(groups) < 3:
+            while p < n and s[p] in " \t\n":
+                p += 1
+            if p >= n or s[p] != "{":
+                break
+            close = find_matching_brace(s, p)
+            if close == -1:
+                break
+            groups.append((p, close))
+            p = close + 1
+        if len(groups) == 3:
+            body = s[groups[2][0] + 1:groups[2][1]].strip()
+            if len(body) >= 2 and body[0] == "$" and body[-1] == "$" and body[1] != "$":
+                body = body[1:-1]
+            out.append(body)
+            i = p
+        else:
+            # Malformed \resizebox — emit the token literally and move on.
+            out.append(needle)
+            i = j + len(needle)
+
+
+# ----------------------------------------------------------------------------
+# Math stashing.
+# ----------------------------------------------------------------------------
+
+
+# Spacing-only @{...} separators in array column specs. KaTeX rejects @{...}
+# wholesale; spacing seps carry no semantic content, so we drop them silently.
+_ARRAY_SPACING_SEP_RE = re.compile(
+    r"^\s*(?:\\(?:,|;|:|!| )|\\q?quad|~|\s)*\s*$"
+)
+
+
+def _tokenize_array_colspec(colspec: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    i = 0
+    while i < len(colspec):
+        c = colspec[i]
+        if c in "lcr":
+            out.append(("col", c))
+            i += 1
+        elif c == "|":
+            out.append(("vbar", "|"))
+            i += 1
+        elif c == "@" and i + 1 < len(colspec) and colspec[i + 1] == "{":
+            close = find_matching_brace(colspec, i + 1)
+            if close == -1:
+                out.append(("other", c))
+                i += 1
+            else:
+                out.append(("sep", colspec[i + 2:close]))
+                i = close + 1
+        elif c.isspace():
+            i += 1
+        else:
+            out.append(("other", c))
+            i += 1
+    return out
+
+
+def _split_array_cells(row: str) -> list[str]:
+    """Split a row on top-level `&`, respecting brace nesting and `\\&`."""
+    cells: list[str] = []
+    start = 0
+    depth = 0
+    i = 0
+    while i < len(row):
+        c = row[i]
+        if c == "\\" and i + 1 < len(row):
+            i += 2
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        elif c == "&" and depth == 0:
+            cells.append(row[start:i])
+            start = i + 1
+        i += 1
+    cells.append(row[start:])
+    return cells
+
+
+def _parse_multicolumn_cell(cell: str) -> tuple[int, str, str, str] | None:
+    """Return (n, align_spec, content, trailing) for a `\\multicolumn{N}{spec}{content}` cell."""
+    m = re.match(r"\s*\\multicolumn\s*\{(\d+)\}\s*\{([^}]*)\}\s*\{", cell)
+    if not m:
+        return None
+    n = int(m.group(1))
+    spec = m.group(2)
+    open_brace = m.end() - 1
+    close = find_matching_brace(cell, open_brace)
+    if close == -1:
+        return None
+    content = cell[open_brace + 1:close]
+    trailing = cell[close + 1:]
+    return n, spec, content, trailing
+
+
+def _rewrite_array_for_katex(colspec: str, body: str) -> tuple[str, str]:
+    """KaTeX does not parse `@{...}` column separators in `\\begin{array}{}`.
+
+    Drop spacing-only `@{...}` (e.g. `@{\\quad}`); merge column pairs joined
+    by a content `@{...}` (e.g. `r@{\\,\\pm\\,}l`) into a single column by
+    inserting the separator content between the corresponding body cells and
+    decrementing any `\\multicolumn{N}` width that spans the merge. Falls back
+    to a plain `@{...}` strip if anything looks unparseable.
+    """
+    tokens = _tokenize_array_colspec(colspec)
+    cols: list[str] = []
+    merges_after: dict[int, str] = {}
+    pending: str | None = None
+    for kind, val in tokens:
+        if kind == "col":
+            if pending is not None and cols:
+                merges_after[len(cols) - 1] = pending
+            cols.append(val)
+            pending = None
+        elif kind == "sep":
+            pending = None if _ARRAY_SPACING_SEP_RE.match(val) else val.strip()
+    if not cols:
+        return colspec, body
+
+    # col_map[i] = final column index of original column i.
+    col_map: list[int] = []
+    final = 0
+    for i in range(len(cols)):
+        col_map.append(final)
+        if i not in merges_after:
+            final += 1
+    n_final = max(col_map) + 1
+
+    new_colspec_parts: list[str] = []
+    final_seen = -1
+    for i, letter in enumerate(cols):
+        f = col_map[i]
+        if f != final_seen:
+            new_colspec_parts.append(letter)
+            final_seen = f
+    new_colspec = "".join(new_colspec_parts)
+    if len(new_colspec) != n_final:
+        new_colspec = "c" * n_final
+
+    if not merges_after:
+        return new_colspec, body
+
+    row_split_re = re.compile(r"(\\\\(?:\[[^\]]*\])?)")
+    pieces = row_split_re.split(body)
+    out_pieces: list[str] = []
+    for idx, piece in enumerate(pieces):
+        if idx % 2 == 1:
+            out_pieces.append(piece)
+            continue
+        rules_m = re.match(
+            r"\s*(?:\\hline\s*|\\(?:top|mid|bottom)rule\s*)*",
+            piece,
+        )
+        prefix_end = rules_m.end() if rules_m else 0
+        prefix = piece[:prefix_end]
+        row_body = piece[prefix_end:]
+        trailing_ws_m = re.search(r"\s*$", row_body)
+        trailing_ws = trailing_ws_m.group(0) if trailing_ws_m else ""
+        row_body = row_body[: len(row_body) - len(trailing_ws)]
+        if not row_body.strip():
+            out_pieces.append(piece)
+            continue
+
+        cells = _split_array_cells(row_body)
+        new_cells: list[str] = []
+        orig = 0
+        i = 0
+        ok = True
+        while i < len(cells):
+            cell = cells[i]
+            mc = _parse_multicolumn_cell(cell)
+            if mc is not None:
+                n_orig, spec, content, trailing = mc
+                if orig >= len(col_map):
+                    ok = False
+                    break
+                end_orig = min(orig + n_orig - 1, len(col_map) - 1)
+                start_f = col_map[orig]
+                end_f = col_map[end_orig]
+                n_new = end_f - start_f + 1
+                if n_new == 1:
+                    new_cells.append(f"{content}{trailing}")
+                else:
+                    new_cells.append(
+                        f"\\multicolumn{{{n_new}}}{{{spec}}}{{{content}}}{trailing}"
+                    )
+                orig += n_orig
+                i += 1
+                continue
+
+            if orig in merges_after and i + 1 < len(cells):
+                bridge = merges_after[orig]
+                right = cells[i + 1]
+                if _parse_multicolumn_cell(right) is not None:
+                    new_cells.append(cell)
+                    orig += 1
+                    i += 1
+                    continue
+                new_cells.append(f"{cell.rstrip()} {bridge} {right.lstrip()}")
+                orig += 2
+                i += 2
+            else:
+                new_cells.append(cell)
+                orig += 1
+                i += 1
+        if not ok:
+            return new_colspec, body
+        out_pieces.append(prefix + "&".join(new_cells) + trailing_ws)
+
+    return new_colspec, "".join(out_pieces)
+
+
+# Per-document zero-arg \newcommand macros, harvested from the .tex preamble
+# by extract_newcommands() and applied inside math regions by
+# _katex_preprocess(). KaTeX does not see \newcommand from the LaTeX
+# preamble, so without this step author macros like \Zn render as undefined.
+# One-argument and box-style macros (e.g. \claudebox) are intentionally
+# skipped — those are handled outside math (or not at all).
+_AUTHOR_MACROS: dict[str, str] = {}
+
+
+def extract_newcommands(tex: str) -> dict[str, str]:
+    """Parse zero-arg \\newcommand{\\Foo}{body} declarations from the .tex
+    preamble (everything before \\begin{document}). Returns {"Foo": "body"}.
+
+    Skips macros with arguments — \\newcommand{\\Foo}[N]{body} — since
+    those are typically prose helpers (\\claudebox, etc.) and the math
+    cases in our retrospectives have all been zero-arg.
+    """
+    m = re.search(r"\\begin\{document\}", tex)
+    preamble = tex[:m.start()] if m else tex
+    out: dict[str, str] = {}
+    for line in preamble.splitlines():
+        nm = re.match(r"\s*\\newcommand\{\\([A-Za-z]+)\}\{(.+)\}\s*$", line)
+        if not nm:
+            continue
+        out[nm.group(1)] = nm.group(2)
+    return out
+
+
+def _apply_author_macros(payload: str) -> str:
+    if not _AUTHOR_MACROS:
+        return payload
+    for name, body in _AUTHOR_MACROS.items():
+        # Word-boundary match: \Zn must not match \Znothing. KaTeX's own
+        # convention is that a backslash command runs to the next non-letter.
+        payload = re.sub(r"\\" + name + r"(?![A-Za-z])", lambda _m, b=body: b, payload)
+    return payload
+
+
+def _katex_preprocess(payload: str) -> str:
+    payload = _apply_author_macros(payload)
+    # \code is a one-arg author macro (\newcommand{\code}[1]{\texttt{#1}})
+    # that extract_newcommands does not capture, so it survives into math
+    # where KaTeX has no \code and fails the block. KaTeX does support
+    # \texttt, so rewrite to that (no html.escape: this is math for KaTeX).
+    payload = replace_brace_command(payload, "code", lambda inner: f"\\texttt{{{inner}}}")
+    pat = re.compile(r"\\begin\{array\}\{")
+    out: list[str] = []
+    i = 0
+    while i < len(payload):
+        m = pat.match(payload, i)
+        if not m:
+            out.append(payload[i])
+            i += 1
+            continue
+        open_brace = m.end() - 1
+        close_brace = find_matching_brace(payload, open_brace)
+        if close_brace == -1:
+            out.append(payload[i])
+            i += 1
+            continue
+        end_m = re.search(r"\\end\{array\}", payload[close_brace + 1:])
+        if not end_m:
+            out.append(payload[i])
+            i += 1
+            continue
+        body_start = close_brace + 1
+        body_end = body_start + end_m.start()
+        end_idx = body_start + end_m.end()
+        colspec = payload[open_brace + 1:close_brace]
+        body = payload[body_start:body_end]
+        new_colspec, new_body = _rewrite_array_for_katex(colspec, body)
+        out.append("\\begin{array}{" + new_colspec + "}" + new_body + "\\end{array}")
+        i = end_idx
+    return "".join(out)
+
+
+def stash_math(s: str) -> tuple[str, list[str]]:
+    placeholders: list[str] = []
+
+    def emit(payload: str) -> str:
+        placeholders.append(_katex_preprocess(payload))
+        return f"\x00m{len(placeholders) - 1}\x00"
+
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        if s.startswith(r"\[", i):
+            end = s.find(r"\]", i + 2)
+            if end != -1:
+                out.append(emit("$$" + s[i + 2:end] + "$$"))
+                i = end + 2
+                continue
+        if s.startswith(r"\(", i):
+            end = s.find(r"\)", i + 2)
+            if end != -1:
+                out.append(emit("$" + s[i + 2:end] + "$"))
+                i = end + 2
+                continue
+        if s[i] == "$" and (i == 0 or s[i - 1] != "\\"):
+            j = i + 1
+            while j < len(s):
+                if s[j] == "$" and s[j - 1] != "\\":
+                    break
+                j += 1
+            if j < len(s):
+                out.append(emit(s[i:j + 1]))
+                i = j + 1
+                continue
+        out.append(s[i])
+        i += 1
+    return "".join(out), placeholders
+
+
+def restore_math(s: str, placeholders: list[str]) -> str:
+    return re.sub(r"\x00m(\d+)\x00", lambda m: placeholders[int(m.group(1))], s)
+
+
+# ----------------------------------------------------------------------------
+# Footnote dropping.
+# ----------------------------------------------------------------------------
+
+
+def drop_footnotes(s: str) -> str:
+    pat = re.compile(r"\\footnote\b\s*\{")
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        m = pat.search(s, i)
+        if not m:
+            out.append(s[i:])
+            break
+        out.append(s[i:m.start()].rstrip(" "))
+        brace = m.end() - 1
+        close = find_matching_brace(s, brace)
+        if close == -1:
+            i = m.end()
+            continue
+        i = close + 1
+    return "".join(out)
+
+
+# ----------------------------------------------------------------------------
+# Block-level environments.
+# ----------------------------------------------------------------------------
+
+
+def convert_environments(body: str) -> str:
+    # Display-math environments that KaTeX understands but require explicit
+    # math delimiters: \begin{align*}...\end{align*} (and align/equation/
+    # gather variants) are valid LaTeX outside math mode, but KaTeX's
+    # auto-render only enters math when it sees $$/$/\[/\(. Wrap each
+    # standalone block in \[...\] so stash_math picks it up. The inner
+    # environment is rewritten to `aligned` (resp. `gathered`) because
+    # KaTeX accepts those inside math delimiters, whereas the bare
+    # align/gather environments are themselves implicitly display-math
+    # in LaTeX and KaTeX treats them inconsistently across versions.
+    def _wrap_display_env(body_s: str, env: str, inner_env: str) -> str:
+        return re.sub(
+            r"\\begin\{" + env + r"\}(.*?)\\end\{" + env + r"\}",
+            lambda m: "\n\n\\[\\begin{" + inner_env + "}" + m.group(1) + "\\end{" + inner_env + "}\\]\n\n",
+            body_s,
+            flags=re.DOTALL,
+        )
+    body = _wrap_display_env(body, "align\\*", "aligned")
+    body = _wrap_display_env(body, "align",    "aligned")
+    body = _wrap_display_env(body, "gather\\*", "gathered")
+    body = _wrap_display_env(body, "gather",    "gathered")
+    # equation/equation* hold a single math expression; no inner env needed.
+    body = re.sub(
+        r"\\begin\{equation\*?\}(.*?)\\end\{equation\*?\}",
+        lambda m: "\n\n\\[" + m.group(1) + "\\]\n\n",
+        body,
+        flags=re.DOTALL,
+    )
+
+    body = re.sub(
+        r"\\begin\{abstract\}(.*?)\\end\{abstract\}",
+        lambda m: "\n\n" + m.group(1).strip() + "\n\n",
+        body,
+        flags=re.DOTALL,
+    )
+
+    # Bibliography. \bibliographystyle{...} is metadata for bibtex, drop it.
+    # \begin{thebibliography}{N} ... \end{thebibliography} becomes an
+    # ordered list under an "References" heading, with each \bibitem{key}
+    # body becoming one <li>. The cite-key is unused (no \cite hyperlinks
+    # in the rendered HTML), so it's discarded.
+    body = re.sub(r"\\bibliographystyle\{[^}]*\}\s*", "", body)
+
+    def _bib_repl(m: re.Match[str]) -> str:
+        inner = m.group(1).strip()
+        items: list[str] = []
+        # Split on \bibitem{key}; the first chunk is preamble (usually empty).
+        chunks = re.split(r"\\bibitem\s*\{[^}]*\}", inner)
+        for chunk in chunks[1:]:
+            text = chunk.strip()
+            if text:
+                items.append(f"  <li>{text}</li>")
+        if not items:
+            return ""
+        return "\n\n<h2>References</h2>\n\n<ol class=\"bibliography\">\n" + "\n".join(items) + "\n</ol>\n\n"
+
+    body = re.sub(
+        r"\\begin\{thebibliography\}\{[^}]*\}(.*?)\\end\{thebibliography\}",
+        _bib_repl,
+        body,
+        flags=re.DOTALL,
+    )
+
+    def verbatim_repl(m: re.Match[str]) -> str:
+        inner = m.group(1).strip("\n")
+        encoded = html.escape(inner).replace("\n", "\x06")
+        return "\n\n<pre><code>" + encoded + "</code></pre>\n\n"
+
+    body = re.sub(r"\\begin\{verbatim\}(.*?)\\end\{verbatim\}", verbatim_repl, body, flags=re.DOTALL)
+
+    def quote_repl(m: re.Match[str]) -> str:
+        inner = m.group(1).strip()
+        # \ttfamily (often paired with \small) turns the quote block into
+        # typewriter-style code. Lift to <pre><code> so newlines and
+        # \hspace*{Nem} indentation render correctly.
+        tt = re.match(r"\s*(?:\\small\s*)?\\ttfamily\b\s*", inner)
+        if tt:
+            code = inner[tt.end():]
+            # \\ in source = LaTeX line break = real newline in <pre>.
+            code = code.replace(r"\\", "\n")
+            # Indentation: \hspace*{Nem} → 2*N spaces (heuristic, matches
+            # typical em-width-in-monospace).
+            code = re.sub(
+                r"\\hspace\*?\s*\{(\d+)em\}",
+                lambda mm: " " * (2 * int(mm.group(1))),
+                code,
+            )
+            # Escape characters used inside Lean code blocks. KaTeX's
+            # auto-render will still pick up \(...\) inline math inside
+            # <pre>, which gives readable arrows like ⇒.
+            code = code.replace(r"\_", "_").replace(r"\&", "&amp;")
+            code = re.sub(r"\\char`\^\{\}", "^", code)
+            return f"\n\n<pre><code>{code.strip()}</code></pre>\n\n"
+        if re.match(r"\s*\\itshape\b", inner):
+            inner = re.sub(r"^\s*\\itshape\b\s*", "", inner)
+            return f"\n\n<blockquote><em>\n{inner.strip()}\n</em></blockquote>\n\n"
+        return f"\n\n<blockquote>\n{inner.strip()}\n</blockquote>\n\n"
+
+    body = re.sub(r"\\begin\{quote\}(.*?)\\end\{quote\}", quote_repl, body, flags=re.DOTALL)
+
+    # Description lists: \begin{description}[...] \item[label] body ... \end{description}
+    # → <dl><dt>label</dt><dd>body</dd>...</dl>.
+    def _description_repl(m: re.Match[str]) -> str:
+        inner = m.group(1)
+        item_pat = re.compile(r"\\item\s*\[([^\[\]]*)\]")
+        matches = list(item_pat.finditer(inner))
+        if not matches:
+            return m.group(0)
+        chunks: list[str] = []
+        for i, im in enumerate(matches):
+            label = im.group(1).strip()
+            body_start = im.end()
+            body_end = matches[i + 1].start() if i + 1 < len(matches) else len(inner)
+            body_text = inner[body_start:body_end].strip()
+            # Strip a trailing period from labels to match \paragraph style;
+            # keep a trailing colon/period in the rendered <dt> for clarity.
+            if not (label.endswith(".") or label.endswith(":") or label.endswith(")")):
+                label = label + "."
+            chunks.append(f"  <dt>{label}</dt>\n  <dd>{body_text}</dd>")
+        return "\n\n<dl class=\"description\">\n" + "\n".join(chunks) + "\n</dl>\n\n"
+    body = re.sub(
+        r"\\begin\{description\}(?:\[[^\]]*\])?(.*?)\\end\{description\}",
+        _description_repl,
+        body,
+        flags=re.DOTALL,
+    )
+
+    # Tables. Handle tabular with booktabs rules; emit <thead>/<tbody>
+    # boundaries from \toprule/\midrule/\bottomrule. Cell content is left
+    # raw so that the later stash_math/inline_transform pipeline picks up
+    # any inline math and inline commands.
+    def _parse_aligns(colspec: str) -> list[str]:
+        aligns: list[str] = []
+        for c in colspec:
+            if c == "l":
+                aligns.append("left")
+            elif c == "c":
+                aligns.append("center")
+            elif c == "r":
+                aligns.append("right")
+            elif c in ("p", "m", "b"):
+                aligns.append("left")
+        return aligns
+
+    def _parse_rows(s: str) -> list[list[str]]:
+        rows = re.split(r"\\\\\s*", s)
+        out: list[list[str]] = []
+        for r in rows:
+            r = r.strip()
+            if not r:
+                continue
+            out.append([c.strip() for c in r.split("&")])
+        return out
+
+    def tabular_repl(colspec_raw: str, body_inner: str) -> str:
+        # Strip width-spec braces (e.g. `p{0.55\linewidth}`) before align extraction.
+        colspec_stripped = re.sub(r"p\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", "p", colspec_raw)
+        colspec = re.sub(r"[|@{}\[\]]|@\{[^}]*\}", "", colspec_stripped)
+        aligns = _parse_aligns(colspec)
+
+        # Split body on horizontal rules. Booktabs \toprule/\midrule/\bottomrule
+        # and the older \hline all become \x01 separators.
+        marked = re.sub(r"\\(?:top|mid|bottom)rule\b\s*|\\hline\b\s*", "\x01", body_inner)
+        segments = [s.strip() for s in marked.split("\x01")]
+        segments = [s for s in segments if s]
+
+        # Heuristic for thead/tbody: if there are >= 2 rule-separated segments,
+        # treat the first as header and the rest as body rows; otherwise all
+        # rows are body.
+        head_rows: list[list[str]] = []
+        body_rows: list[list[str]] = []
+        if len(segments) >= 2:
+            head_rows = _parse_rows(segments[0])
+            body_rows = _parse_rows(" ".join(segments[1:]))
+        elif segments:
+            body_rows = _parse_rows(segments[0])
+
+        def _parse_multicolumn(cell: str) -> tuple[int, str, str] | None:
+            # Recognise \multicolumn{N}{align}{content}. content may contain
+            # nested braces (e.g. \emph{...}), so do a balanced-brace scan
+            # rather than a greedy regex.
+            m = re.match(r"\s*\\multicolumn\s*\{(\d+)\}\s*\{([^}]*)\}\s*\{", cell)
+            if not m:
+                return None
+            n = int(m.group(1))
+            colspec = m.group(2)
+            start = m.end()
+            depth = 1
+            i = start
+            while i < len(cell) and depth > 0:
+                ch = cell[i]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            if depth != 0:
+                return None
+            content = cell[start:i]
+            mc_aligns = _parse_aligns(colspec)
+            align = mc_aligns[0] if mc_aligns else "left"
+            # Trailing characters after the closing brace are silently dropped;
+            # in well-formed LaTeX there is nothing after \multicolumn{}{}{} in
+            # the cell besides whitespace.
+            return n, align, content
+
+        def _cells(row: list[str], tag: str) -> str:
+            parts: list[str] = []
+            col_idx = 0
+            for c in row:
+                mc = _parse_multicolumn(c)
+                if mc is not None:
+                    n, align, content = mc
+                    parts.append(
+                        f'<{tag} colspan="{n}" style="text-align:{align}">{content}</{tag}>'
+                    )
+                    col_idx += n
+                    continue
+                align = aligns[col_idx] if col_idx < len(aligns) else "left"
+                parts.append(f'<{tag} style="text-align:{align}">{c}</{tag}>')
+                col_idx += 1
+            return "".join(parts)
+
+        out_parts = ['<table class="tabular">']
+        if head_rows:
+            out_parts.append("<thead>")
+            for r in head_rows:
+                out_parts.append("<tr>" + _cells(r, "th") + "</tr>")
+            out_parts.append("</thead>")
+        if body_rows:
+            out_parts.append("<tbody>")
+            for r in body_rows:
+                out_parts.append("<tr>" + _cells(r, "td") + "</tr>")
+            out_parts.append("</tbody>")
+        out_parts.append("</table>")
+        return "\n\n" + "\n".join(out_parts) + "\n\n"
+
+    # Balanced-brace scan for \begin{tabular}{<colspec>}<body>\end{tabular}.
+    # A naive `\{([^}]*)\}` colspec capture truncates at the first `}` and
+    # mis-parses width-bearing column types like `p{0.55\linewidth}`.
+    _tabular_open = "\\begin{tabular}"
+    _tabular_close = "\\end{tabular}"
+    _tabular_out: list[str] = []
+    _tabular_pos = 0
+    while True:
+        _tab_start = body.find(_tabular_open, _tabular_pos)
+        if _tab_start < 0:
+            _tabular_out.append(body[_tabular_pos:])
+            break
+        _spec_open = body.find("{", _tab_start + len(_tabular_open))
+        _spec_close = find_matching_brace(body, _spec_open) if _spec_open >= 0 else -1
+        _end_idx = body.find(_tabular_close, _spec_close + 1) if _spec_close >= 0 else -1
+        if _spec_open < 0 or _spec_close < 0 or _end_idx < 0:
+            # Malformed — leave the open marker in place and resume past it.
+            _tabular_out.append(body[_tabular_pos:_tab_start + len(_tabular_open)])
+            _tabular_pos = _tab_start + len(_tabular_open)
+            continue
+        _tabular_out.append(body[_tabular_pos:_tab_start])
+        _tabular_out.append(
+            tabular_repl(body[_spec_open + 1:_spec_close], body[_spec_close + 1:_end_idx])
+        )
+        _tabular_pos = _end_idx + len(_tabular_close)
+    body = "".join(_tabular_out)
+
+    # \begin{center}...\end{center} — unwrap (typically used to centre a
+    # tabular, which the table CSS already centres).
+    body = re.sub(
+        r"\\begin\{center\}(.*?)\\end\{center\}",
+        lambda m: "\n\n" + m.group(1).strip() + "\n\n",
+        body,
+        flags=re.DOTALL,
+    )
+
+    # Figures: \begin{figure}[...]...\end{figure} with optional \caption{}
+    # and \includegraphics[opts]{path}. The path is emitted as src; the
+    # actual image file is copied by write_page when the page is written.
+    def figure_repl(m: re.Match[str]) -> str:
+        inner = m.group(1)
+        ig_m = re.search(r"\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}", inner)
+        if not ig_m:
+            return ""
+        src = ig_m.group(1).strip()
+        cap_m = re.search(r"\\caption\b\s*\{", inner)
+        caption = ""
+        if cap_m:
+            b = cap_m.end() - 1
+            c = find_matching_brace(inner, b)
+            if c != -1:
+                caption = inner[b + 1:c]
+        img = f'<img src="{html.escape(src, quote=True)}" alt="">'
+        cap_html = f"<figcaption>{caption}</figcaption>" if caption else ""
+        return f"\n\n<figure>{img}{cap_html}</figure>\n\n"
+
+    body = re.sub(
+        r"\\begin\{figure\}(?:\[[^\]]*\])?(.*?)\\end\{figure\}",
+        figure_repl,
+        body,
+        flags=re.DOTALL,
+    )
+
+    # Bare \includegraphics outside of \begin{figure}.
+    body = re.sub(
+        r"\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}",
+        lambda m: f'\n\n<figure><img src="{html.escape(m.group(1).strip(), quote=True)}" alt=""></figure>\n\n',
+        body,
+    )
+
+    def list_repl_one(env_tag: str, html_tag: str, body_in: str) -> tuple[str, bool]:
+        pat = re.compile(
+            r"\\begin\{" + env_tag + r"\}(?:\[[^\]]*\])?"
+            r"((?:(?!\\begin\{(?:itemize|enumerate)\}).)*?)"
+            r"\\end\{" + env_tag + r"\}",
+            re.DOTALL,
+        )
+        m = pat.search(body_in)
+        if not m:
+            return body_in, False
+        inner = m.group(1)
+        first = re.search(r"\\item\b", inner)
+        if not first:
+            return body_in[:m.start()] + body_in[m.end():], True
+        inner_after = inner[first.start():]
+        chunks: list[str] = []
+        item_pat = re.compile(r"\\item\b\s*(\[(?:[^\[\]\n]*)\])?")
+        idx = 0
+        while idx < len(inner_after):
+            mm = item_pat.match(inner_after, idx)
+            if not mm:
+                idx += 1
+                continue
+            label = mm.group(1) or ""
+            label_clean = label[1:-1].strip() if label else ""
+            content_start = mm.end()
+            next_item = item_pat.search(inner_after, content_start)
+            content_end = next_item.start() if next_item else len(inner_after)
+            content = inner_after[content_start:content_end].strip()
+            if label_clean:
+                if not (label_clean.endswith(".") or label_clean.endswith(")")):
+                    label_clean = label_clean + "."
+                chunks.append(f"{label_clean} {content}")
+            else:
+                chunks.append(content)
+            idx = content_end
+        body_html = "\n".join(f"      <li>{c}</li>" for c in chunks)
+        replaced = f"\n\n<{html_tag}>\n{body_html}\n    </{html_tag}>\n\n"
+        return body_in[:m.start()] + replaced + body_in[m.end():], True
+
+    changed = True
+    while changed:
+        changed = False
+        for env_tag, html_tag in (("itemize", "ul"), ("enumerate", "ol")):
+            new_body, did = list_repl_one(env_tag, html_tag, body)
+            if did:
+                body = new_body
+                changed = True
+
+    def paragraph_repl(inner: str) -> str:
+        t = inner.strip()
+        if not (t.endswith(".") or t.endswith("?") or t.endswith("!")):
+            t = t + "."
+        return f"\n\n<h4>{t}</h4>\n\n"
+
+    body = replace_brace_command(body, "paragraph", paragraph_repl)
+
+    # \section / \subsection (and their *-starred variants) take a brace
+    # argument that may itself contain braces — e.g. inline math like
+    # $\|\theta\|^{2k}/2$ in a section title. A naive [^}]* regex stops
+    # at the first closing brace inside the math and truncates the title.
+    # replace_brace_command does proper brace matching.
+    body = replace_brace_command(body, "section",     lambda i: f"\n\n<h2>{i.strip()}</h2>\n\n")
+    body = replace_brace_command(body, "section*",    lambda i: f"\n\n<h2>{i.strip()}</h2>\n\n")
+    body = replace_brace_command(body, "subsection",  lambda i: f"\n\n<h3>{i.strip()}</h3>\n\n")
+    body = replace_brace_command(body, "subsection*", lambda i: f"\n\n<h3>{i.strip()}</h3>\n\n")
+    return body
+
+
+# ----------------------------------------------------------------------------
+# Inline transforms.
+# ----------------------------------------------------------------------------
+
+
+def inline_transform(s: str) -> str:
+    s = re.sub(r"(?<!\\)%.*?$", "", s, flags=re.MULTILINE)
+
+    s = s.replace(r"\&", "&amp;")
+    s = s.replace(r"\%", "%")
+    s = s.replace(r"\#", "#")
+    s = s.replace(r"\_", "_")
+    s = s.replace(r"\$", "$")
+    s = re.sub(r"\\textasciitilde\b", "~", s)
+    s = re.sub(r"\\textbackslash\b\s*", "\x05BS\x05", s)
+    # Prose glyphs LaTeX writes with macros. Math regions are already
+    # stashed at this point, so these regexes don't touch math content.
+    s = re.sub(r"\\S(?![A-Za-z])\s*", "§ ", s)
+    s = re.sub(r"\\P(?![A-Za-z])\s*", "¶ ", s)
+    # \label{...} is for cross-refs that don't render on the site.
+    s = re.sub(r"\\label\{[^{}]*\}", "", s)
+    # \ref{...} — without HTML anchors there is nothing useful to link to;
+    # drop both the command and its target. Authors using a numbered ref
+    # in the HTML mirror should restructure to inline the section title.
+    s = re.sub(r"\\ref\{[^{}]*\}", "", s)
+    # Typesetting directives with no HTML equivalent.
+    s = re.sub(r"\\(?:fussy|sloppy)(?![A-Za-z])\s*", "", s)
+    # Residual \hspace*{Nem} outside quote-typewriter blocks (those are
+    # converted earlier). Render as proportional spaces.
+    s = re.sub(r"\\hspace\*?\s*\{(\d+)em\}",
+               lambda m: " " * (2 * int(m.group(1))), s)
+    # \checkmark → ✓
+    s = re.sub(r"\\checkmark(?![A-Za-z])", "✓", s)
+    # En-/em-dash. Em (---) must come before en (--) so we don't eat
+    # one of the three dashes prematurely.
+    s = s.replace("---", "—").replace("--", "–")
+
+    s = replace_brace_command(s, "userbox", lambda inner: f"<blockquote><strong>User:</strong> {inner}</blockquote>")
+    s = replace_brace_command(s, "claudebox", lambda inner: f"<blockquote><strong>Claude:</strong> {inner}</blockquote>")
+    s = replace_brace_command(s, "gptbox", lambda inner: f"<blockquote><strong>GPT-5.5 Pro:</strong> {inner}</blockquote>")
+
+    s = replace_brace_command(s, "texttt", lambda inner: f"<code>{html.escape(inner)}</code>")
+    # \code is a common author \newcommand for inline code. It is a one-arg
+    # macro, so extract_newcommands (zero-arg, math-only) never expands it;
+    # handle it directly like \texttt so body \code{...} doesn't leak when
+    # the retrospective's \newcommand definition isn't applied.
+    s = replace_brace_command(s, "code", lambda inner: f"<code>{html.escape(inner)}</code>")
+    # \verb uses a delimiter-character syntax: \verb<d>...<d> where <d>
+    # is any non-letter (commonly !, |, "). \verb* shows spaces visibly
+    # — we render it the same as \verb. Done BEFORE \emph etc. so a
+    # `\verb|*x*|` payload isn't munged by emphasis matching.
+    s = re.sub(
+        r"\\verb\*?(\S)(.*?)\1",
+        lambda m: f"<code>{html.escape(m.group(2))}</code>",
+        s,
+    )
+    s = replace_brace_command(s, "emph", lambda inner: f"<em>{inner}</em>")
+    s = replace_brace_command(s, "textit", lambda inner: f"<em>{inner}</em>")
+    s = replace_brace_command(s, "textbf", lambda inner: f"<strong>{inner}</strong>")
+    s = replace_brace_command(s, "textsc", lambda inner: f'<span style="font-variant:small-caps;">{inner}</span>')
+    s = replace_brace_command(s, "text", lambda inner: inner)
+
+    # Cross-references to other published retrospectives.
+    #   \tideref{slug}            → <a href="/tides/slug/"><code>slug</code></a>
+    #   \tideref[text]{slug}      → <a href="/tides/slug/">text</a>
+    #   \experimentref{slug}      → <a href="/experiments/slug/"><code>slug</code></a>
+    #   \experimentref[text]{slug}→ <a href="/experiments/slug/">text</a>
+    #   \reviewref{slug}          → <a href="/reviews/slug/"><code>slug</code></a>
+    #   \reviewref[text]{slug}    → <a href="/reviews/slug/">text</a>
+    # The .tex side defines these via hyperref as absolute therisensea.org
+    # links so the PDF works standalone; the renderer emits relative URLs
+    # since the HTML mirror lives on the site itself.
+    def _xref(s: str, cmd: str, prefix: str) -> str:
+        pat = re.compile(r"\\" + re.escape(cmd) + r"(?![A-Za-z])\s*(?:\[([^\]]*)\])?\s*\{")
+        out: list[str] = []
+        i = 0
+        while i < len(s):
+            m = pat.search(s, i)
+            if not m:
+                out.append(s[i:])
+                break
+            out.append(s[i:m.start()])
+            opt = m.group(1)
+            brace = m.end() - 1
+            close = find_matching_brace(s, brace)
+            if close == -1:
+                out.append(s[m.start():m.end()])
+                i = m.end()
+                continue
+            slug = s[brace + 1:close].strip()
+            link_text = opt if opt is not None else f"<code>{html.escape(slug)}</code>"
+            url = prefix + slug + "/"
+            out.append(f'<a href="{html.escape(url, quote=True)}">{link_text}</a>')
+            i = close + 1
+        return "".join(out)
+    s = _xref(s, "tideref",       "/tides/")
+    s = _xref(s, "experimentref", "/experiments/")
+    s = _xref(s, "reviewref",     "/reviews/")
+
+    # Rewrite absolute therisensea.org URLs to relative so the HTML mirror
+    # navigates within the site (faster, immune to hostname changes).
+    def _href_repl(m: re.Match[str]) -> str:
+        url = m.group(1)
+        url = re.sub(r"^https?://(www\.)?therisensea\.org", "", url)
+        return f'<a href="{url}">{m.group(2)}</a>'
+    s = re.sub(r"\\href\{([^}]*)\}\{([^}]*)\}", _href_repl, s)
+    s = re.sub(r"\\url\{([^}]*)\}", lambda m: f'<a href="{m.group(1)}">{m.group(1)}</a>', s)
+
+    s = s.replace("``", "“").replace("''", "”")
+    s = re.sub(r"`([^`'\n]*?)'", lambda m: "‘" + m.group(1) + "’", s)
+
+    s = re.sub(r"~", " ", s)
+    s = re.sub(r"\\\.", ".", s)
+    s = re.sub(r"\\(?= )", "", s)
+    s = re.sub(r"\\,|\\;|\\!|\\:", " ", s)
+    s = re.sub(
+        r"\\(noindent|medskip|smallskip|bigskip|par|maketitle|sloppy|allowdisplaybreaks"
+        r"|tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge"
+        r"|centering|raggedright|raggedleft)\b",
+        "",
+        s,
+    )
+    s = re.sub(r"\\emergencystretch\s*=\s*[^\s]+", "", s)
+    s = re.sub(r"\\q?quad\b", " ", s)
+    s = re.sub(r"\\linebreak\b", "", s)
+    s = re.sub(r"\\l?dots\b", "…", s)
+
+    s = s.replace("\x05BS\x05", "\\")
+    return s
+
+
+# ----------------------------------------------------------------------------
+# Paragraphs.
+# ----------------------------------------------------------------------------
+
+
+BLOCK_OPEN_RE = re.compile(r"^\s*<(h\d|div|ul|ol|dl|pre|blockquote|figure|table)\b", re.IGNORECASE)
+P_OPEN_RE = re.compile(r"^\s*<p\b", re.IGNORECASE)
+
+
+def render_paragraphs(body: str) -> str:
+    blocks = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
+    out: list[str] = []
+    for b in blocks:
+        if BLOCK_OPEN_RE.match(b):
+            out.append(b)
+            continue
+        if P_OPEN_RE.match(b):
+            if not b.rstrip().endswith("</p>"):
+                b += "</p>"
+            out.append(b)
+            continue
+        flowed = re.sub(r"\s+", " ", b).strip()
+        out.append("    <p>" + flowed + "</p>")
+    return "\n\n".join(out)
+
+
+# ----------------------------------------------------------------------------
+# Title and date.
+# ----------------------------------------------------------------------------
+
+
+def strip_preamble(tex: str) -> str:
+    m = re.search(r"\\begin\{document\}(.*?)\\end\{document\}", tex, re.DOTALL)
+    return m.group(1) if m else tex
+
+
+def clean_title_text(s: str) -> str:
+    s = re.sub(r"\\\\", " ", s)
+    s = strip_resizebox(s)
+    stashed, ph = stash_math(s)
+    # Unescape LaTeX-escaped punctuation (\_ \# \& \% \$) before
+    # processing brace commands. \texttt{x\_y} should render as
+    # <code>x_y</code>, not <code>x\_y</code>.
+    for esc, lit in ((r"\_", "_"), (r"\#", "#"), (r"\&", "&amp;"),
+                     (r"\%", "%"), (r"\$", "$")):
+        stashed = stashed.replace(esc, lit)
+    stashed = replace_brace_command(stashed, "texttt", lambda inner: f"<code>{html.escape(inner)}</code>")
+    # \code is a common author \newcommand for inline code; the title path
+    # does not expand author macros, so handle it directly like \texttt.
+    stashed = replace_brace_command(stashed, "code", lambda inner: f"<code>{html.escape(inner)}</code>")
+    stashed = replace_brace_command(stashed, "emph", lambda inner: f"<em>{inner}</em>")
+    stashed = replace_brace_command(stashed, "textit", lambda inner: f"<em>{inner}</em>")
+    stashed = replace_brace_command(stashed, "textbf", lambda inner: f"<strong>{inner}</strong>")
+    stashed = replace_brace_command(stashed, "textsc", lambda inner: f'<span style="font-variant:small-caps;">{inner}</span>')
+    stashed = replace_brace_command(stashed, "text", lambda inner: inner)
+    stashed = stashed.replace(r"\{", "{").replace(r"\}", "}")
+    stashed = re.sub(r"~", " ", stashed)
+    stashed = re.sub(r"\s+", " ", stashed).strip()
+    return restore_math(stashed, ph)
+
+
+def extract_title_emph(tex: str) -> tuple[str, bool]:
+    m = re.search(r"\\title\b\s*\{", tex)
+    if not m:
+        return "Tide retrospective", False
+    brace = m.end() - 1
+    close = find_matching_brace(tex, brace)
+    if close == -1:
+        return "Tide retrospective", False
+    raw = tex[brace + 1:close]
+    # Strip the boilerplate "<kind> retrospective:\\" prefix the template uses.
+    raw = re.sub(
+        r"^\s*(?:Tide-experiment|Experiment|Tide) retrospective:\s*\\\\\s*",
+        "",
+        raw,
+    )
+    stripped = raw.strip()
+    em = re.match(r"^\\emph\s*\{", stripped)
+    if em:
+        b2 = em.end() - 1
+        c2 = find_matching_brace(stripped, b2)
+        if c2 == len(stripped) - 1:
+            return clean_title_text(stripped[b2 + 1:c2]), True
+    return clean_title_text(stripped), False
+
+
+def plain_title_text(s: str) -> str:
+    s = re.sub(r"<[^>]+>", "", s)
+    s = re.sub(r"\$[^$]*\$", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def normalize_date(raw: str) -> str:
+    """Coerce a ``\\date{}`` string to a canonical ISO ``YYYY-MM-DD``.
+
+    Returns ``""`` if no ISO date can be recovered. Tolerates the
+    LaTeX tie ``~`` (treated as a space) and a leading ISO date followed
+    by a parenthetical or other prose (e.g. ``2026-06-04 (evening
+    pivot from qd)`` → ``2026-06-04``). Anything that cannot be reduced
+    to ISO is dropped rather than stored verbatim, because a non-ISO
+    string is neither sortable nor re-parseable on the next sync."""
+    raw = raw.replace("~", " ").strip()
+    iso = re.match(r"(\d{4}-\d{2}-\d{2})", raw)
+    if iso:
+        return iso.group(1)
+    m = re.match(r"^(\d{1,2})\s+(\w+)\s+(\d{4})$", raw)
+    if m:
+        months = {
+            "January": "01", "February": "02", "March": "03",
+            "April": "04", "May": "05", "June": "06", "July": "07",
+            "August": "08", "September": "09", "October": "10",
+            "November": "11", "December": "12",
+        }
+        mm = months.get(m.group(2), "00")
+        if mm != "00":
+            return f"{m.group(3)}-{mm}-{int(m.group(1)):02d}"
+    return ""
+
+
+def extract_date(tex: str, slug: str) -> str:
+    """Return a canonical ISO ``YYYY-MM-DD`` date for an entry.
+
+    The slug's ``YYYY-MM-DD-`` prefix is authoritative: it is ISO,
+    machine-independent, and immune to the ``\\date{}`` variations (LaTeX
+    ties, parentheticals, prose) that used to be stored verbatim and then
+    fail to re-parse on the next sync, demoting the entry to the undated
+    tail. ``\\date{}`` is consulted only when the slug carries no date
+    prefix, and is itself normalised to ISO."""
+    m3 = re.match(r"(\d{4}-\d{2}-\d{2})-", slug)
+    if m3:
+        return m3.group(1)
+    m = re.search(r"\\date\b\s*\{", tex)
+    if m:
+        brace = m.end() - 1
+        close = find_matching_brace(tex, brace)
+        if close != -1:
+            raw = tex[brace + 1:close].strip()
+            if raw:
+                return normalize_date(raw)
+    return ""
+
+
+# ----------------------------------------------------------------------------
+# Summary extraction.
+# ----------------------------------------------------------------------------
+
+
+def make_summary(html_body: str) -> str:
+    m = re.search(r"<p[^>]*>(.*?)</p>", html_body, re.DOTALL)
+    if not m:
+        return ""
+    text = m.group(1)
+    text = re.sub(r"<code>(.*?)</code>", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"<em>(.*?)</em>", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"<strong>(.*?)</strong>", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"<[^>]+>", "", text)
+    # Drop display math: $$...$$ reads as a broken slab in a one-line
+    # preview, and (worse) truncate_summary can cut it mid-expression and
+    # leave an unclosed $$ that breaks KaTeX on the index. Inline $...$ is
+    # kept — it renders fine inline and is often informative in a preview.
+    text = re.sub(r"\$\$.*?\$\$", "", text, flags=re.DOTALL)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def truncate_summary(s: str, max_chars: int = 360) -> str:
+    s = s.strip()
+    if len(s) <= max_chars:
+        return s
+    cut = s[:max_chars]
+    last_period = max(cut.rfind("."), cut.rfind("?"), cut.rfind("!"))
+    if last_period > max_chars - 80:
+        out = cut[:last_period + 1]
+    else:
+        last_space = cut.rfind(" ")
+        out = cut[:last_space] + "&hellip;"
+    # If truncation landed inside an inline $...$ span, drop the dangling
+    # half so KaTeX doesn't see an unterminated delimiter on the index.
+    if out.count("$") % 2 == 1:
+        out = out[:out.rfind("$")].rstrip() + "&hellip;"
+    return out
+
+
+# ----------------------------------------------------------------------------
+# Top-level conversion.
+# ----------------------------------------------------------------------------
+
+
+def convert(tex_path: Path) -> tuple[str, dict]:
+    tex = tex_path.read_text(encoding="utf-8")
+    slug = tex_path.stem
+    kind = kind_for_slug(slug)
+    cfg = kind_config(kind)
+
+    global _AUTHOR_MACROS
+    _AUTHOR_MACROS = extract_newcommands(tex)
+
+    title_text, was_emph = extract_title_emph(tex)
+    date_str = extract_date(tex, slug)
+
+    body = strip_preamble(tex)
+    body = re.sub(r"\\maketitle\b", "", body)
+    body = re.sub(r"\\emergencystretch\s*=\s*[^\s]+", "", body)
+    body = drop_footnotes(body)
+    body = convert_environments(body)
+    body = strip_resizebox(body)
+    body, math_ph = stash_math(body)
+    body = inline_transform(body)
+    body = restore_math(body, math_ph)
+    body = body.replace("\x06", "\n")
+    body = render_paragraphs(body)
+
+    repo = tex_path.parent.parent.name
+    kicker = f"{date_str} &middot; {repo}" if date_str else repo
+
+    h1_inner = f"<em>{title_text}</em>" if was_emph else title_text
+    plain = plain_title_text(title_text)
+    html_title = f"{cfg['h1_prefix']}: {plain} &mdash; The Risen Sea"
+
+    page_header = PAGE_HEADER.format(
+        html_title=html_title,
+        kicker=kicker,
+        h1_prefix=cfg["h1_prefix"],
+        h1_inner=h1_inner,
+        back_href=cfg["back_href"],
+        back_label=cfg["back_label"],
+    )
+    page_footer = PAGE_FOOTER.format(
+        back_href=cfg["back_href"],
+        back_label=cfg["back_label"],
+    )
+    full = page_header + body + page_footer
+
+    meta = {
+        "source_slug": slug,
+        "out_slug": output_slug(slug),
+        "title_text": title_text,
+        "was_emph": was_emph,
+        "h1_inner": h1_inner,
+        "date": date_str,
+        "repo": repo,
+        "summary": make_summary(body),
+        "kind": kind,
+        "tex_path": str(tex_path),
+    }
+    return full, meta
+
+
+# ----------------------------------------------------------------------------
+# Index parsing and rendering.
+# ----------------------------------------------------------------------------
+
+
+def _entry_re_for(kind: str) -> re.Pattern[str]:
+    url_prefix = re.escape(kind_config(kind)["url_prefix"])
+    return re.compile(
+        r'<li>\s*<span class="entry-date">([^<]+)</span>\s*'
+        r'<a class="entry-title" href="' + url_prefix + r'([^/]+)/">(.*?)</a>\s*'
+        r'<p class="entry-summary">(.*?)</p>\s*</li>',
+        re.DOTALL,
+    )
+
+
+def parse_index_entries(path: Path, *, kind: str = "tide") -> list[dict]:
+    if not path.is_file():
+        return []
+    text = path.read_text(encoding="utf-8")
+    entries: list[dict] = []
+    for m in _entry_re_for(kind).finditer(text):
+        kicker = m.group(1).strip()
+        slug = m.group(2).strip()
+        title_html = m.group(3).strip()
+        summary_html = m.group(4).strip()
+        # Hand-written entries may use &middot;; rendered entries use ·.
+        kicker_norm = kicker.replace("&middot;", "·").replace("~", " ")
+        dm = re.match(r"(\d{4}-\d{2}-\d{2})\s*·\s*(.+)", kicker_norm)
+        if dm:
+            date_str, repo = dm.group(1), dm.group(2).strip()
+        else:
+            # Malformed/legacy kicker (LaTeX tie, parenthetical, prose
+            # date): recover the canonical date from the slug and the repo
+            # from the text after the last "·". This self-heals entries
+            # that an older renderer stored with a non-ISO kicker instead
+            # of dropping them to the undated tail.
+            sm = re.match(r"(\d{4}-\d{2}-\d{2})-", slug)
+            date_str = sm.group(1) if sm else ""
+            repo = kicker_norm.rsplit("·", 1)[-1].strip() if "·" in kicker_norm else ""
+        entries.append({
+            "slug": slug,
+            "date": date_str,
+            "repo": repo,
+            "title_html": title_html,
+            "summary_html": summary_html,
+        })
+    return entries
+
+
+def _first_add_times(therisensea: Path, subdir: str) -> dict[str, float]:
+    """Walk git log once and return slug → unix timestamp of the first
+    commit that added ``<subdir>/<slug>/index.html``. Used as the
+    same-date tiebreak in ``render_index``: it is the *true* publish
+    time, immune to bulk re-renders (which scramble filesystem mtime)
+    and to ``git clone`` (which sets mtime to the clone moment)."""
+    import subprocess
+    try:
+        res = subprocess.run(
+            ["git", "log", "--diff-filter=A", "--reverse",
+             "--format=__COMMIT__ %at", "--name-only", "--",
+             f"{subdir}/"],
+            cwd=therisensea, capture_output=True, text=True, check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return {}
+    out: dict[str, float] = {}
+    current_ts: float | None = None
+    for line in res.stdout.splitlines():
+        if line.startswith("__COMMIT__ "):
+            try:
+                current_ts = float(line.split(" ", 1)[1])
+            except ValueError:
+                current_ts = None
+            continue
+        if current_ts is None or not line:
+            continue
+        parts = line.split("/")
+        if len(parts) >= 3 and parts[0] == subdir and parts[-1] == "index.html":
+            slug = parts[1]
+            # --reverse + --diff-filter=A iterates oldest add first, so
+            # the first time we see a slug is its original publish.
+            out.setdefault(slug, current_ts)
+    return out
+
+
+def render_index(
+    entries: list[dict],
+    existing_path: Path | None = None,
+    *,
+    kind: str = "tide",
+    therisensea: Path | None = None,
+) -> str:
+    """Render the index for ``kind`` (tide or experiment). If
+    ``existing_path`` is provided and that file already contains the
+    splice markers for this kind, only the region between them is
+    rewritten — everything else (tagline, tab nav, hand edits to the
+    header/footer) is preserved verbatim. Without markers, the
+    kind-specific fallback template is used.
+
+    Sort key is (date, first-publish-time, slug) DESC: same-date
+    entries break ties by *when the per-page HTML was first added to
+    git*, so most-recently-published entries rise to the top of their
+    date block. Falls back to filesystem mtime if git is unavailable,
+    then to (date, slug) DESC."""
+    cfg = kind_config(kind)
+    begin = cfg["begin_marker"]
+    end = cfg["end_marker"]
+    url_prefix = cfg["url_prefix"]
+
+    if therisensea is not None:
+        pages_root = pages_root_for(therisensea, kind)
+        first_add = _first_add_times(therisensea, cfg["subdir"])
+        for e in entries:
+            ts = first_add.get(e["slug"])
+            if ts is None:
+                # New, not-yet-committed page — use mtime as proxy so
+                # in-process renders during a single sync still get a
+                # sensible relative order.
+                page = pages_root / e["slug"] / "index.html"
+                try:
+                    ts = page.stat().st_mtime
+                except FileNotFoundError:
+                    ts = 0.0
+            e["mtime"] = ts
+    else:
+        for e in entries:
+            e.setdefault("mtime", 0.0)
+    entries = sorted(
+        entries,
+        key=lambda e: (e.get("date", ""), e.get("mtime", 0.0), e["slug"]),
+        reverse=True,
+    )
+    items: list[str] = []
+    for e in entries:
+        kicker = f"{e['date']} · {e['repo']}" if e["date"] else e["repo"]
+        items.append(
+            f"      <li>\n"
+            f"        <span class=\"entry-date\">{kicker}</span>\n"
+            f"        <a class=\"entry-title\" href=\"{url_prefix}{e['slug']}/\">{e['title_html']}</a>\n"
+            f"        <p class=\"entry-summary\">{e['summary_html']}</p>\n"
+            f"      </li>"
+        )
+    items_str = "\n\n".join(items)
+
+    if existing_path is not None and existing_path.is_file():
+        existing = existing_path.read_text(encoding="utf-8")
+        bi = existing.find(begin)
+        ei = existing.find(end)
+        if bi != -1 and ei != -1 and ei > bi:
+            return (
+                existing[: bi + len(begin)]
+                + "\n\n"
+                + items_str
+                + "\n\n"
+                + existing[ei:]
+            )
+
+    return fallback_template(kind).format(
+        entries=items_str, nav=render_nav(cfg["url_prefix"])
+    )
+
+
+def upsert_entry(entries: list[dict], new_entry: dict) -> None:
+    """Replace or insert by slug."""
+    new_entry["summary_html"] = truncate_summary(new_entry["summary_html"])
+    for i, e in enumerate(entries):
+        if e["slug"] == new_entry["slug"]:
+            entries[i] = new_entry
+            return
+    entries.append(new_entry)
+
+
+def write_page(therisensea: Path, meta: dict, html_out: str) -> Path:
+    kind = meta.get("kind", "tide")
+    target = pages_root_for(therisensea, kind) / meta["out_slug"]
+    target.mkdir(parents=True, exist_ok=True)
+    page_path = target / "index.html"
+    # Copy referenced images (from <img src="...">) into the output dir,
+    # rewriting src to the basename so the HTML loads them locally. Source
+    # paths are resolved relative to the .tex file, then to common figure
+    # dirs (./figures/, ../figures/), and finally relative to the SRI root
+    # — so paths like ../../local/<expt>/figures/foo.pdf in a retrospective
+    # also resolve to <sri>/local/<expt>/figures/foo.pdf.
+    tex_path_str = meta.get("tex_path")
+    if tex_path_str:
+        tex_dir = Path(tex_path_str).parent
+        sri_root = find_sri_root()
+        candidates_dirs = [
+            tex_dir,
+            tex_dir / "figures",
+            tex_dir.parent / "figures",
+            sri_root,
+        ]
+
+        def _strip_leading_dotdot(p: Path) -> Path:
+            parts = [x for x in p.parts if x != ".."]
+            return Path(*parts) if parts else p
+
+        def _resolve_and_copy(src: str) -> str:
+            # For HTML mirrors, prefer raster formats (.png, .jpg, .gif, .webp)
+            # over .pdf since browsers can't <img> a PDF. The .tex uses the
+            # PDF for LaTeX compilation; the rendered HTML uses the PNG sibling.
+            src_path = Path(src)
+            preferred = [src_path]
+            if src_path.suffix.lower() == ".pdf":
+                preferred.insert(0, src_path.with_suffix(".png"))
+            # For each preferred form, also try a copy with any leading
+            # "../" segments stripped — lets <sri>-rooted paths like
+            # ../../local/<expt>/figures/foo.pdf resolve under sri_root.
+            variants: list[Path] = []
+            for v in preferred:
+                variants.append(v)
+                stripped = _strip_leading_dotdot(v)
+                if stripped != v:
+                    variants.append(stripped)
+            for variant in variants:
+                for base in candidates_dirs:
+                    cand = (base / variant).resolve()
+                    if cand.is_file():
+                        dest = target / variant.name
+                        if cand != dest:
+                            dest.write_bytes(cand.read_bytes())
+                        return variant.name
+            return src  # leave unresolved; page will 404 on the image
+
+        def _repl(m: re.Match[str]) -> str:
+            src = m.group(1)
+            if src.startswith(("http://", "https://", "data:", "/")):
+                return m.group(0)
+            new_src = _resolve_and_copy(src)
+            return f'src="{html.escape(new_src, quote=True)}"'
+
+        html_out = re.sub(r'src="([^"]+)"', _repl, html_out)
+    page_path.write_text(html_out, encoding="utf-8")
+    return page_path
+
+
+def meta_to_entry(meta: dict) -> dict:
+    return {
+        "slug": meta["out_slug"],
+        "date": meta["date"],
+        "repo": meta["repo"],
+        "title_html": meta["h1_inner"],
+        "summary_html": meta["summary"],
+    }
+
+
+# ----------------------------------------------------------------------------
+# Commands.
+# ----------------------------------------------------------------------------
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    sri = find_sri_root()
+    therisensea = find_therisensea(args.therisensea)
+    tex_path = find_tex(sri, args.repo, args.slug)
+    html_out, meta = convert(tex_path)
+    page_path = write_page(therisensea, meta, html_out)
+    print(f"wrote {page_path}")
+    return 0
+
+
+def cmd_close(args: argparse.Namespace) -> int:
+    sri = find_sri_root()
+    therisensea = find_therisensea(args.therisensea)
+    tex_path = find_tex(sri, args.repo, args.slug)
+    html_out, meta = convert(tex_path)
+    page_path = write_page(therisensea, meta, html_out)
+
+    kind = meta["kind"]
+    index_path = index_path_for(therisensea, kind)
+    entries = parse_index_entries(index_path, kind=kind)
+    upsert_entry(entries, meta_to_entry(meta))
+    index_path.write_text(
+        render_index(entries, index_path, kind=kind, therisensea=therisensea),
+        encoding="utf-8",
+    )
+    print(f"wrote {page_path}")
+    print(f"updated {index_path} ({len(entries)} entries)")
+    return 0
+
+
+def cmd_reindex(args: argparse.Namespace) -> int:
+    therisensea = find_therisensea(args.therisensea)
+    total = 0
+    for kind in KIND_CONFIG:
+        index_path = index_path_for(therisensea, kind)
+        entries = parse_index_entries(index_path, kind=kind)
+        index_path.write_text(
+            render_index(entries, index_path, kind=kind, therisensea=therisensea),
+            encoding="utf-8",
+        )
+        print(f"rewrote {index_path} ({len(entries)} entries)")
+        total += len(entries)
+    return 0
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    sri = find_sri_root()
+    therisensea = find_therisensea(args.therisensea)
+
+    # Partition retrospectives by kind, then run the render/splice loop
+    # independently for each kind. The two indices are independent files
+    # (therisensea/index.html, therisensea/experiments/index.html) and
+    # each has its own splice markers, so they don't interact.
+    entries_by_kind: dict[str, list[dict]] = {}
+    existing_slugs_by_kind: dict[str, set[str]] = {}
+    for kind in KIND_CONFIG:
+        idx = index_path_for(therisensea, kind)
+        entries_by_kind[kind] = parse_index_entries(idx, kind=kind)
+        existing_slugs_by_kind[kind] = {e["slug"] for e in entries_by_kind[kind]}
+
+    # If the renderer itself has been updated, force a re-render of every
+    # page rendered before the script's current mtime. This lets fixes to
+    # the rendering pipeline (e.g. KaTeX macro expansion, align-env
+    # wrapping) propagate to existing pages without a manual --force run.
+    script_mtime = Path(__file__).stat().st_mtime
+
+    rendered = {k: 0 for k in KIND_CONFIG}
+    skipped = 0
+    failed = 0
+    for repo_dir in sorted((sri / "lean").glob("*/retrospectives")):
+        # Skip Tide worktrees; they each carry a copy of the parent repo's
+        # retrospectives that would otherwise be re-rendered.
+        if "-tide-" in repo_dir.parent.name:
+            continue
+        for tex_path in sorted(repo_dir.glob("*.tex")):
+            slug_in = tex_path.stem
+            kind = kind_for_slug(slug_in)
+            out_slug = output_slug(slug_in)
+            page_path = pages_root_for(therisensea, kind) / out_slug / "index.html"
+            if out_slug in existing_slugs_by_kind[kind] and page_path.is_file() and not args.force:
+                page_mtime = page_path.stat().st_mtime
+                tex_mtime = tex_path.stat().st_mtime
+                if tex_mtime <= page_mtime and script_mtime <= page_mtime:
+                    skipped += 1
+                    continue
+                # Else fall through to re-render — either the source
+                # changed, or the renderer did and the page is stale.
+            try:
+                html_out, meta = convert(tex_path)
+            except Exception as e:
+                print(f"FAILED {tex_path}: {e}", file=sys.stderr)
+                failed += 1
+                continue
+            write_page(therisensea, meta, html_out)
+            upsert_entry(entries_by_kind[meta["kind"]], meta_to_entry(meta))
+            rendered[meta["kind"]] += 1
+
+    for kind in KIND_CONFIG:
+        idx = index_path_for(therisensea, kind)
+        idx.write_text(
+            render_index(entries_by_kind[kind], idx, kind=kind, therisensea=therisensea),
+            encoding="utf-8",
+        )
+
+    total = sum(len(v) for v in entries_by_kind.values())
+    rendered_summary = " ".join(f"{kind}s={rendered[kind]}" for kind in KIND_CONFIG)
+    print(
+        f"sync: rendered {rendered_summary} "
+        f"skipped={skipped} failed={failed} total={total}"
+    )
+    return 0
+
+
+# ----------------------------------------------------------------------------
+# CLI.
+# ----------------------------------------------------------------------------
+
+
+def _add_common(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--therisensea",
+        help="Path to the therisensea clone. Defaults to $THERISENSEA_DIR or a sibling of SRI's parent.",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="tide-mirror", description=__doc__)
+    _add_common(p)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("render", help="Render one retrospective to HTML.")
+    _add_common(r)
+    r.add_argument("repo")
+    r.add_argument("slug")
+    r.set_defaults(func=cmd_render)
+
+    c = sub.add_parser("close", help="Render + splice into home index.html.")
+    _add_common(c)
+    c.add_argument("repo")
+    c.add_argument("slug")
+    c.set_defaults(func=cmd_close)
+
+    ri = sub.add_parser("reindex", help="Regenerate home index.html from existing entries.")
+    _add_common(ri)
+    ri.set_defaults(func=cmd_reindex)
+
+    s = sub.add_parser("sync", help="Render every retrospective .tex not already mirrored, then reindex.")
+    _add_common(s)
+    s.add_argument("--force", action="store_true", help="Re-render even when page already exists.")
+    s.set_defaults(func=cmd_sync)
+
+    return p
+
+
+def main(argv: list[str]) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv[1:])
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

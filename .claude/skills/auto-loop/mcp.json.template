@@ -1,0 +1,17 @@
+{
+  "_comment": "Copy to <seabed>/.mcp.json. lean = persistent LSP for fast inner-loop proof checking (mcp__lean__*). theoremsearch = native MCP at api.theoremsearch.com/mcp for in-loop literature/restatement lookup. Set the lean-project-path to the seabed root.",
+  "mcpServers": {
+    "lean": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from", "lean-lsp-mcp", "lean-lsp-mcp",
+        "--lean-project-path", "${PWD}"
+      ]
+    },
+    "theoremsearch": {
+      "type": "http",
+      "url": "https://api.theoremsearch.com/mcp"
+    }
+  }
+}
